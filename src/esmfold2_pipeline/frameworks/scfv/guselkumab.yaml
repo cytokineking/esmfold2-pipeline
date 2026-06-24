@@ -1,0 +1,43 @@
+id: guselkumab
+canonical_name: guselkumab_framework_vhvl
+aliases:
+  - guselkumab
+  - guselkumab_framework_vhvl
+modality: scfv
+format: template
+panel: clinical_core
+chain_orientation: vh_vl
+linker: GGGSGGGSGGGSGGGS
+light_chain: lambda
+template: "EVQLVQSGAEVKKPGESLKISCKGS{hcdr1}IGWVRQMPGKGLEWMGI{hcdr2}RYSPSFQGQVTISADKSISTAYLQWSSLKASDTAMYYC{hcdr3}WGQGTLVTVSSGGGSGGGSGGGSGGGSQSVLTQPPSVSGAPGQRVTISCTGS{lcdr1}VHWYQQLPGTAPKLLIY{lcdr2}KRPSGVPDRFSGSKSGTSASLAITGLQSEDEADYYC{lcdr3}FGGGTKLTVL"
+cdr_lengths:
+  hcdr1: {min: 7, max: 9}
+  hcdr2: {min: 7, max: 9}
+  hcdr3: {min: 7, max: 13}
+  lcdr1: {min: 7, max: 11}
+  lcdr2: 3
+  lcdr3: {min: 9, max: 13}
+framework_annotation:
+  numbering_scheme: IMGT
+  heavy_v_gene: IGHV5-51*01
+  light_v_gene: IGLV1-40*01
+  observed_cdr_lengths:
+    hcdr1: 8
+    hcdr2: 8
+    hcdr3: 10
+    lcdr1: 9
+    lcdr2: 3
+    lcdr3: 11
+therapeutic_source:
+  therapeutic: Guselkumab
+  format: "Whole mAb"
+  target: "IL23A"
+  clinical_stage: "Approved"
+  estimated_status: "Active"
+  genetics: "Genetically human"
+  structures_100pct_sequence_identity: "4m6m:HL/4m6n:HL"
+source:
+  database: Thera-SAbDab
+  download_url: https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/static/downloads/TheraSAbDab_SeqStruc_OnlineDownload.csv
+  accessed: 2026-06-17
+  sequence_release: PL132 / Highest_Clin_Trial field dated Feb '25

@@ -1,0 +1,23 @@
+# Advanced scFv template mode. Fixed residues stay fixed; CDR placeholders are
+# sampled within the configured length ranges and optimized by ESMFold2.
+target:
+  name: cd45
+
+binder:
+  scaffold: scfv
+  framework:
+    name: lab_template
+    template: EVQLVESGGGLVQPGGSLRLSCAAS{hcdr1}YIHWVRQAPGKGLEWVARI{hcdr2}TRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCAR{hcdr3}WGQGTLVTVSSGGGSGGGSGGGSGGGSDIQMTQSPSSLSASVGDRVTITC{lcdr1}WYQQKPGKAPKLLIY{lcdr2}GVPSRFSGSGSGTDFTLTISSLQPEDFATYYC{lcdr3}FGQGTKVEIK
+    cdr_lengths:
+      hcdr1: 7-9
+      hcdr2: 5-6
+      hcdr3: 9-15
+      lcdr1: 11-16
+      lcdr2: 7
+      lcdr3: 9
+
+campaign:
+  num_designs: 3
+  steps: 25
+
+output: gpu_runs/examples/scfv_custom_template

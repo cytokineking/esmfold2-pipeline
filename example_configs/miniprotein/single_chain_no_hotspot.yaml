@@ -1,0 +1,18 @@
+# Small smoke-sized example. For production campaigns, increase num_designs and
+# use campaign.steps: 150.
+target:
+  structure: ../../example_input_structures/2b5i.cif
+  chains: [A]
+  structure_indexing: auth_seq_id
+  conditioning:
+    mode: distogram
+
+binder:
+  scaffold: miniprotein
+  length: 60-200
+
+campaign:
+  num_designs: 4
+  steps: 25
+
+output: gpu_runs/examples/miniprotein_single_chain_no_hotspot

@@ -1,0 +1,43 @@
+id: secukinumab
+canonical_name: secukinumab_framework_vhvl
+aliases:
+  - secukinumab
+  - secukinumab_framework_vhvl
+modality: scfv
+format: template
+panel: clinical_core
+chain_orientation: vh_vl
+linker: GGGSGGGSGGGSGGGS
+light_chain: kappa
+template: "EVQLVESGGGLVQPGGSLRLSCAAS{hcdr1}MNWVRQAPGKGLEWVAA{hcdr2}YYVGSVKGRFTISRDNAKNSLYLQMNSLRVEDTAVYYC{hcdr3}WGRGTLVTVSSGGGSGGGSGGGSGGGSEIVLTQSPGTLSLSPGERATLSCRAS{lcdr1}LAWYQQKPGQAPRLLIY{lcdr2}SRATGIPDRFSGSGSGTDFTLTISRLEPEDFAVYYC{lcdr3}FGQGTRLEIK"
+cdr_lengths:
+  hcdr1: {min: 7, max: 9}
+  hcdr2: {min: 7, max: 9}
+  hcdr3: {min: 17, max: 23}
+  lcdr1: {min: 5, max: 9}
+  lcdr2: 3
+  lcdr3: {min: 7, max: 11}
+framework_annotation:
+  numbering_scheme: IMGT
+  heavy_v_gene: IGHV3-7*01
+  light_v_gene: IGKV3-20*01
+  observed_cdr_lengths:
+    hcdr1: 8
+    hcdr2: 8
+    hcdr3: 20
+    lcdr1: 7
+    lcdr2: 3
+    lcdr3: 9
+therapeutic_source:
+  therapeutic: Secukinumab
+  format: "Whole mAb"
+  target: "IL17A"
+  clinical_stage: "Approved"
+  estimated_status: "Active"
+  genetics: "Genetically human"
+  structures_100pct_sequence_identity: "6wio:AB/6wir:AB"
+source:
+  database: Thera-SAbDab
+  download_url: https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/static/downloads/TheraSAbDab_SeqStruc_OnlineDownload.csv
+  accessed: 2026-06-17
+  sequence_release: PL132 / Highest_Clin_Trial field dated Feb '25

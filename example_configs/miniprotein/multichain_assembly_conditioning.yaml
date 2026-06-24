@@ -1,0 +1,30 @@
+# Multichain target with target-target assembly conditioning. This preserves
+# selected target-chain geometry while the binder-target interface remains
+# predicted by the model.
+target:
+  structure: ../../example_input_structures/KRAS-G12C-A11-lys.pdb
+  chains: [A, C]
+  structure_indexing: auth_seq_id
+  hotspots: "C:1-10"
+  conditioning:
+    mode: distogram
+    assembly: true
+    chain_pairs:
+      - [A, C]
+
+binder:
+  scaffold: miniprotein
+  length: 60-200
+
+campaign:
+  num_designs: 4
+  steps: 25
+
+loss:
+  hotspot_loss_mode: entropy_hotspot
+  hotspot_contact_weight: 2.0
+  hotspot_distogram_contact_cutoff_angstrom: 20.0
+  hotspot_critic_contact_cutoff_angstrom: 5.0
+  hotspot_num_contacts: 1
+
+output: gpu_runs/examples/miniprotein_multichain_assembly_conditioning

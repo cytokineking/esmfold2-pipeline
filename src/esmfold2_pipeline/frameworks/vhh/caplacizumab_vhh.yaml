@@ -1,0 +1,41 @@
+id: caplacizumab_vhh
+canonical_name: caplacizumab_framework_vhh
+aliases:
+  - caplacizumab_vhh
+  - caplacizumab_framework_vhh
+  - caplacizumab
+modality: vhh
+format: template
+panel: clinical_core
+template_numbering: imgt
+domain_role: disease_targeting
+template: "EVQLVESGGGLVQPGGSLRLSCAAS{cdr1}MGWFRQAPGKGRELVAA{cdr2}YYPDSVEGRFTISRDNAKRMVYLQMNSLRAEDTAVYYC{cdr3}WGQGTQVTVSS"
+cdr_lengths:
+  cdr1: {min: 7, max: 9}
+  cdr2: {min: 7, max: 9}
+  cdr3: {min: 18, max: 24}
+framework_annotation:
+  numbering_scheme: IMGT
+  inferred_species: alpaca
+  heavy_v_gene: IGHV3-3*01
+  heavy_j_gene: IGHJ4*01
+  observed_cdr_lengths:
+    cdr1: 8
+    cdr2: 8
+    cdr3: 21
+therapeutic_source:
+  therapeutic: Caplacizumab
+  source_row: Caplacizumab
+  format: "Nanobody"
+  target: "VWF"
+  selected_domain_target: "VWF"
+  selected_sequence_field: HeavySequence
+  clinical_stage: "Approved"
+  estimated_status: "NFD"
+  genetics: "Humanised"
+  structures_100pct_sequence_identity: "7a6o:B/7eow:B"
+source:
+  database: Thera-SAbDab
+  download_url: https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/static/downloads/TheraSAbDab_SeqStruc_OnlineDownload.csv
+  accessed: 2026-06-17
+  sequence_release: PL132 / Highest_Clin_Trial field dated Feb '25

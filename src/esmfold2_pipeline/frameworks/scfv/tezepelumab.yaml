@@ -1,0 +1,43 @@
+id: tezepelumab
+canonical_name: tezepelumab_framework_vhvl
+aliases:
+  - tezepelumab
+  - tezepelumab_framework_vhvl
+modality: scfv
+format: template
+panel: clinical_core
+chain_orientation: vh_vl
+linker: GGGSGGGSGGGSGGGS
+light_chain: lambda
+template: "QMQLVESGGGVVQPGRSLRLSCAAS{hcdr1}MHWVRQAPGKGLEWVAV{hcdr2}HYADSVKGRFTITRDNSKNTLNLQMNSLRAEDTAVYYC{hcdr3}WGQGTMVTVSSGGGSGGGSGGGSGGGSSYVLTQPPSVSVAPGQTARITCGGN{lcdr1}VHWYQQKPGQAPVLVVY{lcdr2}DRPSWIPERFSGSNSGNTATLTISRGEAGDEADYYC{lcdr3}FGGGTKLTVL"
+cdr_lengths:
+  hcdr1: {min: 7, max: 9}
+  hcdr2: {min: 7, max: 9}
+  hcdr3: {min: 12, max: 18}
+  lcdr1: {min: 5, max: 8}
+  lcdr2: 3
+  lcdr3: {min: 9, max: 13}
+framework_annotation:
+  numbering_scheme: IMGT
+  heavy_v_gene: IGHV3-33*01
+  light_v_gene: IGLV3-21*02
+  observed_cdr_lengths:
+    hcdr1: 8
+    hcdr2: 8
+    hcdr3: 15
+    lcdr1: 6
+    lcdr2: 3
+    lcdr3: 11
+therapeutic_source:
+  therapeutic: Tezepelumab
+  format: "Whole mAb"
+  target: "TSLP"
+  clinical_stage: "Approved"
+  estimated_status: "Active"
+  genetics: "Genetically human"
+  structures_100pct_sequence_identity: "5j13:CB"
+source:
+  database: Thera-SAbDab
+  download_url: https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/static/downloads/TheraSAbDab_SeqStruc_OnlineDownload.csv
+  accessed: 2026-06-17
+  sequence_release: PL132 / Highest_Clin_Trial field dated Feb '25

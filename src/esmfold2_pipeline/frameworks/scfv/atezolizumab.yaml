@@ -1,0 +1,18 @@
+id: atezolizumab
+canonical_name: atezolizumab_framework_vhvl
+aliases:
+  - atezolizumab
+  - atezolizumab_framework_vhvl
+modality: scfv
+format: template
+template: "EVQLVESGGGLVQPGGSLRLSCAAS{hcdr1}WIHWVRQAPGKGLEWVAWI{hcdr2}TYYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCAR{hcdr3}WGQGTLVTVSSGGGSGGGSGGGSGGGSDIQMTQSPSSLSASVGDRVTITC{lcdr1}WYQQKPGKAPKLLIY{lcdr2}GVPSRFSGSGSGTDFTLTISSLQPEDFATYYC{lcdr3}FGQGTKVEIK"
+cdr_lengths:
+  hcdr1: {min: 7, max: 9}
+  hcdr2: {min: 5, max: 6}
+  hcdr3: {min: 9, max: 15}
+  lcdr1: {min: 11, max: 16}
+  lcdr2: 7
+  lcdr3: 9
+source:
+  upstream_file: /Users/aaronring/esm/cookbook/tutorials/binder_design.py
+  upstream_symbol: BINDER_PROMPT_FACTORIES

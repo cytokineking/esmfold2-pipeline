@@ -1,0 +1,44 @@
+id: vobarilizumab_il6r_vhh
+canonical_name: vobarilizumab_il6r_framework_vhh
+aliases:
+  - vobarilizumab_il6r_vhh
+  - vobarilizumab_il6r_framework_vhh
+  - vobarilizumab_il6r
+modality: vhh
+format: template
+panel: clinical_core
+template_numbering: imgt
+domain_role: disease_targeting
+template: "EVQLVESGGGLVQPGGSLRLSCAAS{cdr1}MAWYRQAPGKGRELVAG{cdr2}SYADSVKGRFTISRDNAKNTLYLQMNSLRPEDTAVYYC{cdr3}WGQGTLVTVSS"
+cdr_lengths:
+  cdr1: {min: 7, max: 9}
+  cdr2: {min: 6, max: 8}
+  cdr3: {min: 12, max: 18}
+framework_annotation:
+  numbering_scheme: IMGT
+  inferred_species: alpaca
+  heavy_v_gene: IGHV3S53*01
+  heavy_j_gene: IGHJ5*01
+  observed_cdr_lengths:
+    cdr1: 8
+    cdr2: 7
+    cdr3: 15
+therapeutic_source:
+  therapeutic: Vobarilizumab
+  source_row: Vobarilizumab
+  format: "Bispecific Single Domains (VH-VH')"
+  target: "IL6R/CD126;ALB"
+  selected_domain_target: "IL6R/CD126"
+  selected_sequence_field: HeavySequence
+  clinical_stage: "Phase-II"
+  estimated_status: "Discontinued"
+  genetics: "Humanised;Humanised"
+  structures_100pct_sequence_identity: "7xl0:B:A;None"
+multispecific_context:
+  has_additional_heavy_domain: true
+  additional_heavy_sequence_field: HeavySequence(ifbispec)
+source:
+  database: Thera-SAbDab
+  download_url: https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/static/downloads/TheraSAbDab_SeqStruc_OnlineDownload.csv
+  accessed: 2026-06-17
+  sequence_release: PL132 / Highest_Clin_Trial field dated Feb '25

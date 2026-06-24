@@ -1,0 +1,43 @@
+id: lebrikizumab
+canonical_name: lebrikizumab_framework_vhvl
+aliases:
+  - lebrikizumab
+  - lebrikizumab_framework_vhvl
+modality: scfv
+format: template
+panel: clinical_core
+chain_orientation: vh_vl
+linker: GGGSGGGSGGGSGGGS
+light_chain: kappa
+template: "QVTLRESGPALVKPTQTLTLTCTVS{hcdr1}VNWIRQPPGKALEWLAM{hcdr2}VYNSALKSRLTISKDTSKNQVVLTMTNMDPVDTATYYC{hcdr3}WGQGSLVTVSSGGGSGGGSGGGSGGGSDIVMTQSPDSLSVSLGERATINCRAS{lcdr1}MHWYQQKPGQPPKLLIY{lcdr2}NLESGVPDRFSGSGSGTDFTLTISSLQAEDVAVYYC{lcdr3}FGGGTKVEIK"
+cdr_lengths:
+  hcdr1: {min: 7, max: 9}
+  hcdr2: {min: 6, max: 8}
+  hcdr3: {min: 9, max: 15}
+  lcdr1: {min: 8, max: 12}
+  lcdr2: 3
+  lcdr3: {min: 7, max: 11}
+framework_annotation:
+  numbering_scheme: IMGT
+  heavy_v_gene: IGHV2-70*01
+  light_v_gene: IGKV4-1*01
+  observed_cdr_lengths:
+    hcdr1: 8
+    hcdr2: 7
+    hcdr3: 12
+    lcdr1: 10
+    lcdr2: 3
+    lcdr3: 9
+therapeutic_source:
+  therapeutic: Lebrikizumab
+  format: "Whole mAb"
+  target: "IL13"
+  clinical_stage: "Approved"
+  estimated_status: "Active"
+  genetics: "Humanised"
+  structures_100pct_sequence_identity: "4i77:HL"
+source:
+  database: Thera-SAbDab
+  download_url: https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/static/downloads/TheraSAbDab_SeqStruc_OnlineDownload.csv
+  accessed: 2026-06-17
+  sequence_release: PL132 / Highest_Clin_Trial field dated Feb '25

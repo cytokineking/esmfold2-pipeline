@@ -1,0 +1,41 @@
+id: sonelokimab_il17f_vhh
+canonical_name: sonelokimab_il17f_framework_vhh
+aliases:
+  - sonelokimab_il17f_vhh
+  - sonelokimab_il17f_framework_vhh
+  - sonelokimab_il17f
+modality: vhh
+format: template
+panel: clinical_core
+template_numbering: imgt
+domain_role: disease_targeting
+template: "EVQLVESGGGLVQPGGSLRLSCAAS{cdr1}MGWLRQAPGKEREFVAA{cdr2}YYADSVKGRFTISRDNSKNTLYLQMNSLRPEDTAVYYC{cdr3}WGQGTLVTVSS"
+cdr_lengths:
+  cdr1: {min: 5, max: 7}
+  cdr2: {min: 7, max: 9}
+  cdr3: {min: 14, max: 20}
+framework_annotation:
+  numbering_scheme: IMGT
+  inferred_species: alpaca
+  heavy_v_gene: IGHV3-3*01
+  heavy_j_gene: IGHJ2*01
+  observed_cdr_lengths:
+    cdr1: 6
+    cdr2: 8
+    cdr3: 17
+therapeutic_source:
+  therapeutic: Sonelokimab2
+  source_row: Sonelokimab2
+  format: "Trispecific Single Domains (VH-VH'-VH''); Monospecific Entry"
+  target: "IL17F"
+  selected_domain_target: "IL17F"
+  selected_sequence_field: HeavySequence
+  clinical_stage: "Phase-III"
+  estimated_status: "Active"
+  genetics: "Humanised"
+  structures_100pct_sequence_identity: "None"
+source:
+  database: Thera-SAbDab
+  download_url: https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/static/downloads/TheraSAbDab_SeqStruc_OnlineDownload.csv
+  accessed: 2026-06-17
+  sequence_release: PL132 / Highest_Clin_Trial field dated Feb '25

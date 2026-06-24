@@ -1,0 +1,43 @@
+id: dupilumab
+canonical_name: dupilumab_framework_vhvl
+aliases:
+  - dupilumab
+  - dupilumab_framework_vhvl
+modality: scfv
+format: template
+panel: clinical_optional
+chain_orientation: vh_vl
+linker: GGGSGGGSGGGSGGGS
+light_chain: kappa
+template: "EVQLVESGGGLEQPGGSLRLSCAGS{hcdr1}MTWVRQAPGKGLEWVSS{hcdr2}YYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYC{hcdr3}WGQGTTVTVSSGGGSGGGSGGGSGGGSDIVMTQSPLSLPVTPGEPASISCRSS{lcdr1}LDWYLQKSGQSPQLLIY{lcdr2}NRASGVPDRFSGSGSGTDFTLKISRVEAEDVGFYYC{lcdr3}FGQGTKLEIK"
+cdr_lengths:
+  hcdr1: {min: 7, max: 9}
+  hcdr2: {min: 7, max: 9}
+  hcdr3: {min: 15, max: 21}
+  lcdr1: {min: 9, max: 13}
+  lcdr2: 3
+  lcdr3: {min: 7, max: 11}
+framework_annotation:
+  numbering_scheme: IMGT
+  heavy_v_gene: IGHV3-23*04
+  light_v_gene: IGKV2-28*01
+  observed_cdr_lengths:
+    hcdr1: 8
+    hcdr2: 8
+    hcdr3: 18
+    lcdr1: 11
+    lcdr2: 3
+    lcdr3: 9
+therapeutic_source:
+  therapeutic: Dupilumab
+  format: "Whole mAb"
+  target: "IL4R/CD124"
+  clinical_stage: "Approved"
+  estimated_status: "Active"
+  genetics: "Genetically human"
+  structures_100pct_sequence_identity: "6wgb:AB:CD/6wgj:AB:CD:EF/6wgk:AB:CD:EF:GH/6wgl:AB/6wg8:AB"
+source:
+  database: Thera-SAbDab
+  download_url: https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/static/downloads/TheraSAbDab_SeqStruc_OnlineDownload.csv
+  accessed: 2026-06-17
+  sequence_release: PL132 / Highest_Clin_Trial field dated Feb '25

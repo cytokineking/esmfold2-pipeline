@@ -1,0 +1,18 @@
+# Small development-sized scFv example. For production campaigns, increase
+# num_designs and use campaign.steps: 150.
+target:
+  structure: ../../example_input_structures/2b5i.cif
+  chains: [A]
+  structure_indexing: auth_seq_id
+  conditioning:
+    mode: distogram
+
+binder:
+  scaffold: scfv
+  framework: trastuzumab_framework_vhvl
+
+campaign:
+  num_designs: 3
+  steps: 25
+
+output: gpu_runs/examples/scfv_single_framework_no_hotspot

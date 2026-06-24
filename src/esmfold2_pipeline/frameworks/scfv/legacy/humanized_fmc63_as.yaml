@@ -1,0 +1,39 @@
+id: humanized_fmc63_as
+canonical_name: humanized_fmc63_as_framework_vhvl
+aliases:
+  - humanized_fmc63_as
+  - humanized_fmc63_as_framework_vhvl
+  - humanized_fmc63
+  - hufmc63_as
+modality: scfv
+format: template
+panel: clinical_optional_car_context
+chain_orientation: vh_vl
+linker: GGGSGGGSGGGSGGGS
+light_chain: kappa
+template: "QVQLQESGPGLVKPSGTLSLTCAVS{hcdr1}VSWIRQPPGKGLEWIGV{hcdr2}YYNSALKSRVTISRDNSKNTLYLQMNSLRAEDTAVYYC{hcdr3}WGQGTLVTVSSGGGSGGGSGGGSGGGSDIQMTQSPSTLSASVGDRVTITCRAS{lcdr1}LNWYQQKPDQAPKLLIK{lcdr2}RLHSGVPSRFSGSGSGTDFTFTISSLQPEDIATYYC{lcdr3}FGQGTKLEIK"
+cdr_lengths:
+  hcdr1: {min: 7, max: 9}
+  hcdr2: {min: 6, max: 8}
+  hcdr3: {min: 11, max: 17}
+  lcdr1: {min: 5, max: 8}
+  lcdr2: 3
+  lcdr3: {min: 7, max: 11}
+framework_annotation:
+  numbering_scheme: IMGT
+  heavy_v_gene: IGHV4-30-2*07
+  light_v_gene: IGKV1-33*01
+  observed_cdr_lengths:
+    hcdr1: 8
+    hcdr2: 7
+    hcdr3: 14
+    lcdr1: 6
+    lcdr2: 3
+    lcdr3: 9
+notes:
+  - "Humanized FMC63-derived CD19 scFv framework; included as optional CAR-context scaffold, not as part of the core Thera-SAbDab clinical mAb panel."
+source:
+  database: Google Patents
+  patent: WO2018200496A1
+  url: https://patents.google.com/patent/WO2018200496A1/en
+  accessed: 2026-06-17

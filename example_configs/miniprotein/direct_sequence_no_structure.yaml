@@ -1,0 +1,16 @@
+# Direct target sequence example. No structural template is required for this
+# mode, and structure-only fields such as chains/hotspots/conditioning are not
+# used.
+target:
+  name: custom_sequence_target
+  sequence: ACDEFGHIKLMNPQRSTVWY
+
+binder:
+  scaffold: miniprotein
+  length: 60-120
+
+campaign:
+  num_designs: 4
+  steps: 25
+
+output: gpu_runs/examples/miniprotein_direct_sequence_no_structure

@@ -1,0 +1,18 @@
+id: ocankitug
+canonical_name: ocankitug_framework_vhvl
+aliases:
+  - ocankitug
+  - ocankitug_framework_vhvl
+modality: scfv
+format: template
+template: "QVQLVQSGAEVKKPGSSVKVSCKAS{hcdr1}WMHWVRQAPGQGLEWMGII{hcdr2}TSLNQKFQGRVTITADTSTSTAYMELSSLRSEDTAVYYCAR{hcdr3}WGQGTLVTVSSGGGSGGGSGGGSGGGSDIQMTQSPSSLSASVGDRVTITC{lcdr1}WYQQKPGKAPKLLIY{lcdr2}GVPSRFSGSGSGTDFTLTISSLQPEDFATYYC{lcdr3}FGQGTKVEIK"
+cdr_lengths:
+  hcdr1: {min: 7, max: 9}
+  hcdr2: {min: 5, max: 6}
+  hcdr3: {min: 8, max: 14}
+  lcdr1: {min: 11, max: 16}
+  lcdr2: 7
+  lcdr3: 9
+source:
+  upstream_file: /Users/aaronring/esm/cookbook/tutorials/binder_design.py
+  upstream_symbol: BINDER_PROMPT_FACTORIES

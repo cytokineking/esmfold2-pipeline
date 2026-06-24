@@ -1,0 +1,17 @@
+# Peptide:MHC-style multichain target without hotspot steering.
+target:
+  structure: ../../example_input_structures/KRAS-G12C-A11-lys.pdb
+  chains: [A, C]
+  structure_indexing: auth_seq_id
+  conditioning:
+    mode: distogram
+
+binder:
+  scaffold: miniprotein
+  length: 60-200
+
+campaign:
+  num_designs: 4
+  steps: 25
+
+output: gpu_runs/examples/miniprotein_multichain_no_hotspot

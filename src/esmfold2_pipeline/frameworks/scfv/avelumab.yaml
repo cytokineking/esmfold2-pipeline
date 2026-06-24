@@ -1,0 +1,43 @@
+id: avelumab
+canonical_name: avelumab_framework_vhvl
+aliases:
+  - avelumab
+  - avelumab_framework_vhvl
+modality: scfv
+format: template
+panel: clinical_core
+chain_orientation: vh_vl
+linker: GGGSGGGSGGGSGGGS
+light_chain: lambda
+template: "EVQLLESGGGLVQPGGSLRLSCAAS{hcdr1}MMWVRQAPGKGLEWVSS{hcdr2}FYADTVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYC{hcdr3}WGQGTLVTVSSGGGSGGGSGGGSGGGSQSALTQPASVSGSPGQSITISCTGT{lcdr1}VSWYQQHPGKAPKLMIY{lcdr2}NRPSGVSNRFSGSKSGNTASLTISGLQAEDEADYYC{lcdr3}FGTGTKVTVL"
+cdr_lengths:
+  hcdr1: {min: 7, max: 9}
+  hcdr2: {min: 7, max: 9}
+  hcdr3: {min: 10, max: 16}
+  lcdr1: {min: 7, max: 11}
+  lcdr2: 3
+  lcdr3: {min: 8, max: 12}
+framework_annotation:
+  numbering_scheme: IMGT
+  heavy_v_gene: IGHV3-23*01
+  light_v_gene: IGLV2-14*03
+  observed_cdr_lengths:
+    hcdr1: 8
+    hcdr2: 8
+    hcdr3: 13
+    lcdr1: 9
+    lcdr2: 3
+    lcdr3: 10
+therapeutic_source:
+  therapeutic: Avelumab
+  format: "Whole mAb"
+  target: "PDL1/CD274"
+  clinical_stage: "Approved"
+  estimated_status: "Active"
+  genetics: "Genetically human"
+  structures_100pct_sequence_identity: "4nki:HL/5grj:HL"
+source:
+  database: Thera-SAbDab
+  download_url: https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/static/downloads/TheraSAbDab_SeqStruc_OnlineDownload.csv
+  accessed: 2026-06-17
+  sequence_release: PL132 / Highest_Clin_Trial field dated Feb '25

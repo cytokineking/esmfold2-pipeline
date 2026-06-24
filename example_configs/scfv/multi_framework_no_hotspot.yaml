@@ -1,0 +1,21 @@
+# Round-robin framework sweep. num_designs is the total number of candidates,
+# not the number per framework.
+target:
+  structure: ../../example_input_structures/2b5i.cif
+  chains: [A]
+  structure_indexing: auth_seq_id
+  conditioning:
+    mode: distogram
+
+binder:
+  scaffold: scfv
+  frameworks:
+    - trastuzumab_framework_vhvl
+    - atezolizumab_framework_vhvl
+    - ocankitug_framework_vhvl
+
+campaign:
+  num_designs: 6
+  steps: 25
+
+output: gpu_runs/examples/scfv_multi_framework_no_hotspot

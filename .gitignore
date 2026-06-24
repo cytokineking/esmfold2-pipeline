@@ -1,0 +1,14 @@
+.DS_Store
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+*.sqlite
+*.sqlite-*
+.venv/
+dist/
+build/
+*.egg-info/
+example_input_structures/
+docs/
+configs/

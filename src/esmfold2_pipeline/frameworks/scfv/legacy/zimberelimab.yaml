@@ -1,0 +1,43 @@
+id: zimberelimab
+canonical_name: zimberelimab_framework_vhvl
+aliases:
+  - zimberelimab
+  - zimberelimab_framework_vhvl
+modality: scfv
+format: template
+panel: clinical_optional
+chain_orientation: vh_vl
+linker: GGGSGGGSGGGSGGGS
+light_chain: lambda
+template: "QLQLQESGPGLVKPSETLTLTCTVS{hcdr1}WVWIRQPPGKGLEWIGS{hcdr2}YYNPSLKSRVTVSVDTSKNQFSLKLNSVAATDTALYYC{hcdr3}WGQGTLVTVSSGGGSGGGSGGGSGGGSQSALTQPASVSGSPGQSITISCTGT{lcdr1}VSWYQQHPGKAPELMIY{lcdr2}NRPSGVSDRFSGSKSGNTASLTISGLQAEDEADYYC{lcdr3}FGGGTKLTVL"
+cdr_lengths:
+  hcdr1: {min: 9, max: 11}
+  hcdr2: {min: 6, max: 8}
+  hcdr3: {min: 12, max: 18}
+  lcdr1: {min: 7, max: 11}
+  lcdr2: 3
+  lcdr3: {min: 8, max: 12}
+framework_annotation:
+  numbering_scheme: IMGT
+  heavy_v_gene: IGHV4-39*01
+  light_v_gene: IGLV2-14*03
+  observed_cdr_lengths:
+    hcdr1: 10
+    hcdr2: 7
+    hcdr3: 15
+    lcdr1: 9
+    lcdr2: 3
+    lcdr3: 10
+therapeutic_source:
+  therapeutic: Zimberelimab
+  format: "Whole mAb"
+  target: "PDCD1/CD279/PD1"
+  clinical_stage: "Approved"
+  estimated_status: "Active"
+  genetics: "Genetically human"
+  structures_100pct_sequence_identity: "None"
+source:
+  database: Thera-SAbDab
+  download_url: https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/static/downloads/TheraSAbDab_SeqStruc_OnlineDownload.csv
+  accessed: 2026-06-17
+  sequence_release: PL132 / Highest_Clin_Trial field dated Feb '25

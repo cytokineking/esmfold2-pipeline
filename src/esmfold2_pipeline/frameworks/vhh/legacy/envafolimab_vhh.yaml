@@ -1,0 +1,41 @@
+id: envafolimab_vhh
+canonical_name: envafolimab_framework_vhh
+aliases:
+  - envafolimab_vhh
+  - envafolimab_framework_vhh
+  - envafolimab
+modality: vhh
+format: template
+panel: clinical_core
+template_numbering: imgt
+domain_role: disease_targeting
+template: "QVQLVESGGGLVQPGGSLRLSCAAS{cdr1}MAWFRQAPGKERERVAK{cdr2}YLADSVKGRFTISRDNSKNTVYLQMNSLRAEDTAVYYC{cdr3}WGQGTLVTVSS"
+cdr_lengths:
+  cdr1: {min: 7, max: 9}
+  cdr2: {min: 7, max: 9}
+  cdr3: {min: 18, max: 24}
+framework_annotation:
+  numbering_scheme: IMGT
+  inferred_species: alpaca
+  heavy_v_gene: IGHV3-3*01
+  heavy_j_gene: IGHJ5*01
+  observed_cdr_lengths:
+    cdr1: 8
+    cdr2: 8
+    cdr3: 21
+therapeutic_source:
+  therapeutic: Envafolimab
+  source_row: Envafolimab
+  format: "Single Domain Variable Fragment;H"
+  target: "PDL1/CD274"
+  selected_domain_target: "PDL1/CD274"
+  selected_sequence_field: HeavySequence
+  clinical_stage: "Approved"
+  estimated_status: "Active"
+  genetics: "Chimeric and/or humanised"
+  structures_100pct_sequence_identity: "None"
+source:
+  database: Thera-SAbDab
+  download_url: https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/static/downloads/TheraSAbDab_SeqStruc_OnlineDownload.csv
+  accessed: 2026-06-17
+  sequence_release: PL132 / Highest_Clin_Trial field dated Feb '25

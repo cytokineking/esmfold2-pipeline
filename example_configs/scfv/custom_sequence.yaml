@@ -1,0 +1,18 @@
+# Advanced fixed-sequence mode. The full scFv sequence is annotated with
+# abnumber/ANARCI during config check and runtime; CDR residues become mutable
+# positions.
+target:
+  name: cd45
+
+binder:
+  scaffold: scfv
+  framework:
+    name: lab_fixed_scfv
+    sequence: EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSSGGGSGGGGSGGGGSGGGGSDIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK
+    mutate: cdrs
+
+campaign:
+  num_designs: 3
+  steps: 25
+
+output: gpu_runs/examples/scfv_custom_sequence

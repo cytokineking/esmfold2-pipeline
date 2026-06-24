@@ -1,0 +1,26 @@
+# scFv hotspot example. Design-time hotspot loss is restricted to mutable CDR
+# residues for scFvs.
+target:
+  structure: ../../example_input_structures/2b5i.cif
+  chains: [A]
+  structure_indexing: auth_seq_id
+  hotspots: "A:88,91"
+  conditioning:
+    mode: distogram
+
+binder:
+  scaffold: scfv
+  framework: trastuzumab_framework_vhvl
+
+campaign:
+  num_designs: 3
+  steps: 25
+
+loss:
+  hotspot_loss_mode: entropy_hotspot
+  hotspot_contact_weight: 2.0
+  hotspot_distogram_contact_cutoff_angstrom: 20.0
+  hotspot_critic_contact_cutoff_angstrom: 5.0
+  hotspot_num_contacts: 1
+
+output: gpu_runs/examples/scfv_hotspot_cdr_steering
