@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -144,6 +145,25 @@ class ValidationReportTest(unittest.TestCase):
                 config=ValidationPlanConfig(model_name=MOCK_VALIDATION_MODEL),
             )
             run_mock_validation(campaign_dir)
+            long_candidate_id = "target_" + ("long_candidate_" * 8) + "seed0"
+            with sqlite3.connect(campaign_dir / "campaign.sqlite") as conn:
+                conn.execute("PRAGMA foreign_keys = OFF")
+                for table in (
+                    "candidates",
+                    "critic_metrics",
+                    "validation_tasks",
+                    "validation_structures",
+                    "attempts",
+                    "validation_msa_job_candidates",
+                ):
+                    update = (
+                        f"UPDATE {table} "
+                        "SET candidate_id = ? "
+                        "WHERE candidate_id IS NOT NULL"
+                    )
+                    conn.execute(update, (long_candidate_id,))
+                conn.commit()
+                conn.execute("PRAGMA foreign_keys = ON")
 
             result = analyze_campaign(campaign_dir, top_k=1)
 
@@ -153,6 +173,7 @@ class ValidationReportTest(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["analysis_rank"], "1")
+            self.assertEqual(rows[0]["candidate_id"], long_candidate_id)
             self.assertEqual(rows[0]["validator_model"], MOCK_VALIDATION_MODEL)
             self.assertEqual(rows[0]["binder_length"], "20")
             self.assertIn("binder_ca_rmsd_after_target_alignment", rows[0])
@@ -168,11 +189,27 @@ class ValidationReportTest(unittest.TestCase):
                     / "esmfold2_iptm_vs_mock_protenix_v2_ipsae_colored_by_rmsd.png"
                 ).exists()
             )
-            top_dirs = sorted(result.top_ranked_dir.glob("rank0001__*"))
-            self.assertEqual(len(top_dirs), 1)
-            self.assertTrue((top_dirs[0] / "esmfold2.pdb").exists())
-            self.assertTrue((top_dirs[0] / "mock_protenix_v2.cif").exists())
-            self.assertTrue((top_dirs[0] / "metadata.json").exists())
+            esm_structures = sorted(
+                (result.top_ranked_dir / "esmfold2").glob("rank0001_*_esmfold2.pdb")
+            )
+            validator_structures = sorted(
+                (result.top_ranked_dir / "mock_protenix_v2").glob(
+                    "rank0001_*_mock_protenix_v2.cif"
+                )
+            )
+            self.assertEqual(len(esm_structures), 1)
+            self.assertEqual(len(validator_structures), 1)
+            self.assertIn(long_candidate_id, esm_structures[0].name)
+            self.assertIn(long_candidate_id, validator_structures[0].name)
+            self.assertEqual(
+                rows[0]["copied_esmfold2_structure"],
+                esm_structures[0].relative_to(campaign_dir).as_posix(),
+            )
+            self.assertEqual(
+                rows[0]["copied_validator_structure"],
+                validator_structures[0].relative_to(campaign_dir).as_posix(),
+            )
+            self.assertFalse(any(result.top_ranked_dir.glob("**/metadata.json")))
             summary = json.loads(result.summary_json.read_text())
             self.assertEqual(summary["counts"]["ranked_designs"], 1)
             self.assertEqual(summary["counts"]["top_k"], 1)

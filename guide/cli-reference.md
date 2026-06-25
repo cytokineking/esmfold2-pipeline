@@ -129,7 +129,7 @@ uv run esmfold2-pipeline export /path/to/runs/my-campaign-n100
 | `validate-run CAMPAIGN_DIR` | Run pending Protenix validation tasks on one GPU. |
 | `validate-run-multi CAMPAIGN_DIR --gpus all` | Start one Protenix validation worker per GPU. |
 | `validate-report CAMPAIGN_DIR` | Write validation results and structure samples under `validation/{model}/`. |
-| `analyze CAMPAIGN_DIR` | Rank validated designs and copy top-k paired structures under `analysis/`. |
+| `analyze CAMPAIGN_DIR` | Rank validated designs and copy top-k paired structures under `ranked_results/`. |
 | `validate CAMPAIGN_DIR` | Thin wrapper for MSA prefetch, validation planning/running, report generation, and analysis ranking. |
 
 See [Validation](validation.md) for the full Protenix validation lifecycle.
@@ -188,7 +188,7 @@ generated config before running).
 | `launch` | `--skip-export` | no | off | Aggregate and select, but do not copy selected ESMFold2 structures. |
 | `launch` | `--skip-validation` | no | off | Skip Protenix validation even if the campaign config has a `validation` block. |
 | `export` | `--max-designs N` | no | all selected | Export only the top N ranked designs. |
-| `launch`, `analyze`, `validate` | `--analysis-top-k N` / `--top-k N` | no | all ranked | Copy only the top N paired structures into `analysis/top_ranked/` (the ranking CSV still covers all). |
+| `launch`, `analyze`, `validate` | `--analysis-top-k N` / `--top-k N` | no | all ranked | Copy only the top N paired structures into `ranked_results/top_ranked/` (the ranking CSV still covers all). |
 | `launch`, `validate` | `--skip-analysis` | no | off | Skip the combined validation ranking and paired structure copy. |
 | `launch` | `--validation-msa-workers N` | no | 1 if validation config present, else 0 | Background MSA workers run during `launch`. |
 | `launch`, `validate-msa-run`, `validate` | `--msa-max-requests-per-minute N` | no | `5` | Campaign-wide MSA server submit throttle. |

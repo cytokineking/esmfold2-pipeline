@@ -11,7 +11,7 @@ RMSD against the ESMFold2 prediction.
 For normal campaigns, put a `validation` block in the YAML and run `launch`.
 After ESMFold2 design, aggregation, selection, and export, `launch` runs the
 same validation lifecycle described below and then writes the combined analysis
-ranking under `analysis/`.
+ranking under `ranked_results/`.
 
 `validate-plan` supports built-in scFv campaigns when bundled structural
 framework templates are available. Custom scFv frameworks still require explicit
@@ -80,4 +80,4 @@ uv run esmfold2-pipeline validate-report /path/to/runs/my-campaign-n100
 ```
 
 Validation outputs land under `validation/{model}/` and ranked paired structures
-under `analysis/`. See [Output layout](outputs.md) for the full tree.
+under `ranked_results/`. See [Output layout](outputs.md) for the full tree.

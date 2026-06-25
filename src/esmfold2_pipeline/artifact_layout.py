@@ -23,7 +23,11 @@ VALIDATION_RESULTS_CSV = "validation_results.csv"
 VALIDATION_STRUCTURE_SAMPLES_CSV = "structure_samples.csv"
 VALIDATION_SUMMARY_JSON = "validation_summary.json"
 
-ANALYSIS_DIR = "analysis"
+# On-disk folder for the analysis step's ranked output. Named "ranked_results"
+# (rather than "analysis") because it only appears once validation+ranking runs
+# and holds the final ranked designs; the analysis step/flags/config keep the
+# "analysis" name.
+ANALYSIS_DIR = "ranked_results"
 ANALYSIS_COMBINED_RANKING_CSV = "combined_ranking.csv"
 ANALYSIS_RANKING_SUMMARY_JSON = "ranking_summary.json"
 ANALYSIS_PLOTS_DIR = "plots"

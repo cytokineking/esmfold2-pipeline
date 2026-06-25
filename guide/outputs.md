@@ -3,8 +3,8 @@
 [← Back to README](../README.md) · [Documentation index](README.md)
 
 A completed `launch` campaign looks like this. If validation is not configured,
-the `validation/` and `analysis/` sections are absent unless you run validation
-later.
+the `validation/` and `ranked_results/` sections are absent unless you run
+validation later.
 
 ```text
 campaign/
@@ -43,15 +43,15 @@ campaign/
       validation_results.csv
       structure_samples.csv
       validation_summary.json
-  analysis/
+  ranked_results/
     combined_ranking.csv
     ranking_summary.json
     plots/
     top_ranked/
-      rank0001__candidate_id/
-        esmfold2.pdb
-        protenix_v2.cif
-        metadata.json
+      esmfold2/
+        rank0001_<candidate_id>_esmfold2.pdb
+      protenix_v2/
+        rank0001_<candidate_id>_protenix_v2.cif
 ```
 
 ## Important details
@@ -93,9 +93,11 @@ campaign/
   `validation/protenix_v2/`.
 - `validation/{model}/structures/.staging/` is a hidden crash-safety staging
   folder used during CIF promotion; completed runs normally leave it empty.
-- `analysis/combined_ranking.csv` ranks every analyzable validated design.
-  `analysis/top_ranked/` copies only the configured top-k paired ESMFold2 and
-  validator structures for inspection.
+- `ranked_results/combined_ranking.csv` ranks every analyzable validated design.
+  `ranked_results/top_ranked/` copies only the configured top-k structures for
+  inspection, grouped into `esmfold2/` and `{validator}/` subfolders with paired
+  `rank0001_<candidate_id>_<model>` filenames (the rank joins each structure back
+  to its `combined_ranking.csv` row).
 
 ## Reconciling the database
 

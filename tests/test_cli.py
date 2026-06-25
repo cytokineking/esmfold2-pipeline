@@ -771,7 +771,7 @@ output: {campaign_dir}
             self.assertTrue(
                 (
                     campaign_dir
-                    / "analysis"
+                    / "ranked_results"
                     / "combined_ranking.csv"
                 ).exists()
             )

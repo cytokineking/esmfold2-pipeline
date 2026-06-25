@@ -277,9 +277,11 @@ campaign/
   validation/
     protenix_v2/
       validation_results.csv
-  analysis/
+  ranked_results/
     combined_ranking.csv
-    top_ranked/                # paired ESMFold2 + validator structures
+    top_ranked/
+      esmfold2/                # rank0001_<candidate>_esmfold2.pdb …
+      protenix_v2/             # rank0001_<candidate>_protenix_v2.cif …
 ```
 
 Full annotated tree and per-file notes: [Output layout](guide/outputs.md).

@@ -689,7 +689,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     analyze = subparsers.add_parser(
         "analyze",
-        help="rank validated designs and copy top-k paired structures under analysis/",
+        help="rank validated designs and copy top-k paired structures under ranked_results/",
     )
     analyze.add_argument("campaign_dir", type=Path)
     analyze.add_argument(

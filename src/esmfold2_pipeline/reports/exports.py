@@ -205,6 +205,8 @@ VALIDATION_STRUCTURES_MANIFEST_FIELDS = [
 COMBINED_RANKING_FIELDS = [
     "analysis_rank",
     *[field for field in VALIDATION_MANIFEST_FIELDS if field != "validation_rank"],
+    "copied_esmfold2_structure",
+    "copied_validator_structure",
 ]
 
 
@@ -590,6 +592,12 @@ def analyze_campaign(
         )
     ]
 
+    copied_designs = _write_top_ranked_structures(
+        root,
+        top_ranked_dir=top_ranked_dir,
+        ranked_rows=ranked_rows,
+        top_k=top_k,
+    )
     combined_ranking_csv = analysis_dir / ANALYSIS_COMBINED_RANKING_CSV
     write_text_atomic(
         combined_ranking_csv,
@@ -597,13 +605,6 @@ def analyze_campaign(
             _validation_report_fields(COMBINED_RANKING_FIELDS, ranked_rows),
             ranked_rows,
         ),
-    )
-
-    copied_designs = _write_top_ranked_structures(
-        root,
-        top_ranked_dir=top_ranked_dir,
-        ranked_rows=ranked_rows,
-        top_k=top_k,
     )
     plot_paths, plot_warnings = _write_analysis_plots(
         plots_dir=plots_dir,
@@ -696,20 +697,24 @@ def _write_top_ranked_structures(
             continue
         rank = _optional_int_value(row.get("analysis_rank")) or copied_designs + 1
         candidate_id = str(row.get("candidate_id") or "candidate")
-        rank_dir = top_ranked_dir / f"rank{rank:04d}__{_safe_artifact_name(candidate_id, max_len=96)}"
         validator_name = validator_slug(str(row.get("validator_model") or "validator"))
-        esm_dst = rank_dir / "esmfold2.pdb"
-        validator_dst = rank_dir / f"{validator_name}{validated_path.suffix or '.cif'}"
+        # Group by model so each top-ranked design is a paired pair of files that
+        # sort by rank and stay collision-safe even if the folders are merged:
+        #   top_ranked/esmfold2/rank0001_<candidate>_esmfold2.pdb
+        #   top_ranked/<validator>/rank0001_<candidate>_<validator>.cif
+        # Per-design metadata is intentionally omitted; combined_ranking.csv is
+        # the single source of truth and rank joins each file back to its row.
+        stem = f"rank{rank:04d}_{_safe_artifact_name(candidate_id)}"
+        esm_dst = top_ranked_dir / ESMFOLD2_DIR / f"{stem}_{ESMFOLD2_DIR}.pdb"
+        validator_dst = (
+            top_ranked_dir
+            / validator_name
+            / f"{stem}_{validator_name}{validated_path.suffix or '.cif'}"
+        )
         write_bytes_atomic(esm_dst, source_path.read_bytes())
         write_bytes_atomic(validator_dst, validated_path.read_bytes())
-        write_json_atomic(
-            rank_dir / "metadata.json",
-            {
-                **{key: row.get(key) for key in COMBINED_RANKING_FIELDS},
-                "copied_esmfold2_structure": esm_dst.relative_to(root).as_posix(),
-                "copied_validator_structure": validator_dst.relative_to(root).as_posix(),
-            },
-        )
+        row["copied_esmfold2_structure"] = esm_dst.relative_to(root).as_posix()
+        row["copied_validator_structure"] = validator_dst.relative_to(root).as_posix()
         copied_designs += 1
     return copied_designs
 
@@ -748,7 +753,7 @@ def _write_analysis_plots(
         ),
         xlabel="ESMFold2 ipTM",
         ylabel="Validator ipTM",
-        color_label="Binder RMSD after target alignment (A)",
+        color_label="Binder RMSD after target alignment (Å)",
     )
     plot_paths.extend(paths)
     warnings.extend(plot_warnings)
@@ -764,7 +769,7 @@ def _write_analysis_plots(
         ),
         xlabel="ESMFold2 ipTM",
         ylabel="Validator ipSAE",
-        color_label="Binder RMSD after target alignment (A)",
+        color_label="Binder RMSD after target alignment (Å)",
     )
     plot_paths.extend(paths)
     warnings.extend(plot_warnings)
@@ -776,7 +781,7 @@ def _write_analysis_plots(
         y_field="validator_iptm",
         color_field=None,
         filename=f"{plot_validator_slug}_iptm_vs_binder_rmsd.png",
-        xlabel="Binder RMSD after target alignment (A)",
+        xlabel="Binder RMSD after target alignment (Å)",
         ylabel="Validator ipTM",
         color_label=None,
     )
@@ -790,7 +795,7 @@ def _write_analysis_plots(
         y_field="validator_ipsae",
         color_field=None,
         filename=f"{plot_validator_slug}_ipsae_vs_binder_rmsd.png",
-        xlabel="Binder RMSD after target alignment (A)",
+        xlabel="Binder RMSD after target alignment (Å)",
         ylabel="Validator ipSAE",
         color_label=None,
     )
@@ -811,6 +816,20 @@ def _analysis_validator_slug(rows: list[dict[str, Any]]) -> str:
     return "validator"
 
 
+def _scatter_stats_text(np: Any, xs: Any, ys: Any) -> str:
+    """n / Pearson / Spearman annotation, omitting coefficients when undefined."""
+
+    lines = [f"n={len(xs)}"]
+    if len(xs) >= 2 and np.std(xs) > 0 and np.std(ys) > 0:
+        pearson = float(np.corrcoef(xs, ys)[0, 1])
+        rank_x = xs.argsort().argsort().astype(float)
+        rank_y = ys.argsort().argsort().astype(float)
+        spearman = float(np.corrcoef(rank_x, rank_y)[0, 1])
+        lines.append(f"Pearson r={pearson:.2f}")
+        lines.append(f"Spearman rho={spearman:.2f}")
+    return "\n".join(lines)
+
+
 def _scatter_plot(
     plt: Any,
     *,
@@ -824,33 +843,71 @@ def _scatter_plot(
     ylabel: str,
     color_label: str | None,
 ) -> tuple[list[Path], list[str]]:
-    points = [
-        (
-            _optional_float_value(row.get(x_field)),
-            _optional_float_value(row.get(y_field)),
-            _optional_float_value(row.get(color_field)) if color_field else None,
-        )
-        for row in rows
-    ]
-    points = [(x, y, color) for x, y, color in points if x is not None and y is not None]
+    import numpy as np
+
+    points = []
+    for row in rows:
+        x = _optional_float_value(row.get(x_field))
+        y = _optional_float_value(row.get(y_field))
+        if x is None or y is None:
+            continue
+        color = _optional_float_value(row.get(color_field)) if color_field else None
+        rejected = _optional_bool_value(row.get("validator_passed")) is not True
+        points.append((x, y, color, rejected))
     if not points:
         return [], [f"skipped plot {filename}: no rows with {x_field} and {y_field}"]
-    xs = [point[0] for point in points]
-    ys = [point[1] for point in points]
-    colors = [point[2] for point in points if point[2] is not None]
-    figure, axis = plt.subplots(figsize=(6.5, 4.75), dpi=160)
-    if color_field and len(colors) == len(points):
-        scatter = axis.scatter(xs, ys, c=colors, cmap="viridis", s=36, alpha=0.85)
-        colorbar = figure.colorbar(scatter, ax=axis)
-        colorbar.set_label(color_label or color_field)
+
+    xs = np.array([point[0] for point in points], dtype=float)
+    ys = np.array([point[1] for point in points], dtype=float)
+    rejected = np.array([point[3] for point in points], dtype=bool)
+    colors = [point[2] for point in points]
+    has_color = bool(color_field) and all(value is not None for value in colors)
+
+    figure, axis = plt.subplots(figsize=(8.4, 6.4))
+    axis.grid(True, color="#e4e4e4", linewidth=0.8, zorder=0)
+    if has_color:
+        # Clip the colour scale at the 95th percentile so a single high-RMSD
+        # outlier cannot wash out the contrast among the good (low-RMSD) designs.
+        # viridis_r maps low RMSD -> yellow, high RMSD -> dark.
+        color_values = np.array(colors, dtype=float)
+        vmax = float(np.percentile(color_values, 95))
+        if not vmax > 0:
+            vmax = float(color_values.max()) or 1.0
+        scatter = axis.scatter(
+            xs, ys, c=np.clip(color_values, 0.0, vmax), cmap="viridis_r",
+            vmin=0.0, vmax=vmax, s=78, edgecolor="none", alpha=0.95, zorder=3,
+        )
+        colorbar = figure.colorbar(scatter, ax=axis, pad=0.02)
+        colorbar.set_label(color_label or color_field, fontsize=12)
+        if float(color_values.max()) > vmax + 1e-9:
+            colorbar.ax.text(
+                0.5, 1.015, f">={vmax:.1f}", transform=colorbar.ax.transAxes,
+                ha="center", va="bottom", fontsize=9,
+            )
     else:
-        axis.scatter(xs, ys, s=36, alpha=0.85)
-    axis.set_xlabel(xlabel)
-    axis.set_ylabel(ylabel)
-    axis.grid(True, alpha=0.25)
+        axis.scatter(xs, ys, s=78, edgecolor="none", alpha=0.95, zorder=3)
+
+    if rejected.any():
+        axis.scatter(
+            xs[rejected], ys[rejected], facecolors="none", edgecolors="#e0202a",
+            linewidth=1.7, s=165, zorder=4, label="rejected",
+        )
+        axis.legend(
+            loc="lower right", frameon=True, framealpha=0.92,
+            edgecolor="#cccccc", fontsize=12,
+        )
+
+    axis.set_xlabel(xlabel, fontsize=13)
+    axis.set_ylabel(ylabel, fontsize=13)
+    axis.set_title(f"{ylabel} vs {xlabel}", fontsize=16)
+    axis.text(
+        0.03, 0.97, _scatter_stats_text(np, xs, ys), transform=axis.transAxes,
+        va="top", ha="left", fontsize=11,
+        bbox=dict(boxstyle="round", facecolor="white", edgecolor="#cccccc"),
+    )
     figure.tight_layout()
     path = plots_dir / filename
-    figure.savefig(path)
+    figure.savefig(path, dpi=200, facecolor="white")
     plt.close(figure)
     return [path], []
 
@@ -2503,9 +2560,9 @@ def _clear_generated_tree(path: Path) -> None:
             child.unlink()
 
 
-def _safe_artifact_name(value: str, *, max_len: int) -> str:
+def _safe_artifact_name(value: str) -> str:
     text = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip()).strip("._-")
-    return (text or "artifact")[:max_len]
+    return text or "artifact"
 
 
 def _json_object(text: str, row_id: str) -> dict[str, Any]:
