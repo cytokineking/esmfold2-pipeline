@@ -105,8 +105,8 @@ retries, heartbeats) can find them in the
 
 > **Requirements:** a CUDA-capable NVIDIA GPU (80 GB strongly recommended) and a
 > Linux GPU host with Python 3.12. Tested on H100, H200, A100, and Blackwell
-> (RTX PRO 6000 Blackwell, B200) GPUs with CUDA 12.8. Full hardware, disk, and
-> installer detail in the [installation guide](guide/installation.md).
+> (RTX PRO 6000 Blackwell, B200, B300) GPUs with CUDA 12.8+. Full hardware,
+> disk, and installer detail in the [installation guide](guide/installation.md).
 
 **1. Install** — clones ESM, builds isolated `uv` environments, installs the
 optional Protenix validation runtime, and preloads the common ESMFold2
@@ -156,8 +156,8 @@ uv run esmfold2-pipeline launch \
   --out runs/custom-antigen-n100 --esm-repo "$ESM_REPO" --gpus all
 ```
 
-For custom frameworks, conditioning, or advanced loss settings, write a YAML
-config and `launch config.yaml` instead — see the
+For custom frameworks, conditioning overrides, or advanced loss settings, write
+a YAML config and `launch config.yaml` instead — see the
 [configuration reference](guide/configuration.md) and
 [`example_configs/`](example_configs/). `launch` writes the final metrics,
 shortlist, selected structure copies, and, when the YAML has a `validation`

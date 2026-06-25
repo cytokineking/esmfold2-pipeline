@@ -1218,8 +1218,6 @@ output: {campaign_dir}
 target:
   structure: {target_path}
   chains: [A, B]
-  conditioning:
-    mode: distogram
 binder:
   scaffold: miniprotein
 campaign:
@@ -1234,8 +1232,44 @@ output: {campaign_dir}
             config = load_campaign_config(config_path)
             self.assertIsNotNone(config.target_structure)
             assert config.target_structure is not None
+            self.assertEqual(config.target_structure.conditioning_mode, "distogram")
             self.assertTrue(config.target_structure.conditioning_assembly)
             self.assertIsNone(config.target_structure.conditioning_chain_pairs)
+            self.assertTrue(config.target_geometry_drift.enabled)
+
+    def test_structure_conditioning_and_geometry_drift_can_be_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            target_path = root / "target.pdb"
+            _write_multichain_test_pdb(target_path)
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                f"""
+target:
+  structure: {target_path}
+  chains: [A, B]
+  conditioning:
+    mode: none
+loss:
+  target_geometry_drift:
+    enabled: false
+binder:
+  scaffold: miniprotein
+campaign:
+  num_designs: 1
+  critics:
+    - ESMFold2-Experimental-Fast
+  steps: 1
+output: {root / "campaign"}
+""".lstrip()
+            )
+
+            config = load_campaign_config(config_path)
+            self.assertIsNotNone(config.target_structure)
+            assert config.target_structure is not None
+            self.assertEqual(config.target_structure.conditioning_mode, "none")
+            self.assertFalse(config.target_structure.conditioning_assembly)
+            self.assertFalse(config.target_geometry_drift.enabled)
 
     def test_explicit_multichain_assembly_false_is_honored(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

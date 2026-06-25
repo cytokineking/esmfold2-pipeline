@@ -113,9 +113,10 @@ can be recovered from mmCIF metadata, PDB `SEQRES`, or
 partial mask. Unresolved residues stay in the target sequence and folded output,
 but their missing template distances are excluded from conditioning.
 
-Users normally only need `conditioning.mode: distogram`. Set
-`conditioning.require_resolved: true` when you want strict dense-template
-behavior that rejects any unresolved representative coordinates:
+Structure-backed targets default to `conditioning.mode: distogram`, including
+YAML-free `launch --target-structure` runs. Set `conditioning.mode: none` to opt
+out, or set `conditioning.require_resolved: true` when you want strict
+dense-template behavior that rejects any unresolved representative coordinates:
 
 ```yaml
 target:

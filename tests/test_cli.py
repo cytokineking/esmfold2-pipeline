@@ -1057,6 +1057,17 @@ output: {campaign_dir}
             self.assertEqual(resolved["target"]["structure"], str(target_path.resolve()))
             self.assertEqual(resolved["target"]["chains"], ["A"])
             self.assertEqual(resolved["target"]["hotspots"], {"A": ["2"]})
+            self.assertEqual(resolved["target"]["conditioning"]["mode"], "distogram")
+            self.assertFalse(resolved["target"]["conditioning"]["assembly"])
+            self.assertTrue(resolved["loss"]["target_geometry_drift"]["enabled"])
+            self.assertTrue(
+                (
+                    campaign_dir
+                    / "target"
+                    / "conditioning"
+                    / "chain_A_distogram.npy"
+                ).exists()
+            )
             self.assertTrue((campaign_dir / "target" / "chain_summary.json").exists())
 
     def test_launch_rejects_missing_explicit_target_source(self) -> None:

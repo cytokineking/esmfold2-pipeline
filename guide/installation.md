@@ -52,14 +52,17 @@ cd esmfold2-pipeline
 
 The installer installs `uv` if needed, installs Python 3.12, clones or updates
 [Biohub ESM](https://github.com/Biohub/esm), syncs this pipeline environment,
-installs ESM into that environment, and pre-downloads the common ESMFold2
+installs ESM into that environment, installs the default ESMFold2 accelerator
+packages (`xformers` and cuEquivariance), and pre-downloads the common ESMFold2
 checkpoints. It installs into `$HOME/esmfold2` by default and writes
 `$HOME/esmfold2/env.sh`.
 
-The installer does not modify system Python and does not run `sudo`, `apt`,
-system `pip`, or `python -m pip`. The only user-level tool it installs is `uv`;
-Python and package dependencies are managed by `uv` inside this project's
-environment.
+The installer does not modify system Python and does not run system `pip` or
+`python -m pip`. The only user-level Python tool it installs is `uv`; Python
+package dependencies are managed by `uv` inside this project's environment.
+When Protenix validation support is enabled, the installer also ensures HMMER is
+available for VHH MSA preparation, using `apt-get` or Homebrew when `hmmscan` is
+not already on `PATH`.
 
 After installation, activate the environment and run a preflight:
 
@@ -95,16 +98,22 @@ cookbook tutorial design loop.
 ./install.sh --skip-model-preload
 ./install.sh --protenix-checkpoint-dir /path/to/protenix-checkpoints
 ./install.sh --skip-protenix-checkpoint-download
+./install.sh --no-accelerators
+./install.sh --no-hmmer
 ./install.sh --no-protenix
 ```
 
-scFv and VHH campaigns do not require antibody annotation packages at runtime.
-Bundled and template frameworks define their CDR positions directly, and custom
-fixed-sequence scFv frameworks must provide explicit CDR ranges.
+scFv and VHH design campaigns do not require antibody annotation packages for
+CDR definition. VHH validation with `validation.msa.use_msa: true` does require
+VHH numbering during MSA prefetch, so the installer adds `abnumber` and
+`anarcii` to the pipeline environment and checks that HMMER's `hmmscan` is on
+`PATH`.
 
-Optional performance packages such as `transformer-engine`, `xformers`, or
-`flash-attn` can speed up ESMC/attention kernels on supported systems, but they
-are not required for the pipeline interface.
+The default accelerator package set is `xformers`, `cuequivariance`,
+`cuequivariance-torch`, and `cuequivariance-ops-torch-cu12`. Use
+`ESMFOLD2_ACCELERATOR_SPECS` to override that list, or `--no-accelerators` when
+installing on a system where those wheels are unavailable. `transformer-engine`
+and `flash-attn` remain system-specific optional installs.
 
 ## First-run and preload behavior
 

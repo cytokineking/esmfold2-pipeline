@@ -365,6 +365,9 @@ def check_campaign_config(
         try:
             prepared_target = parse_structure_target(config.target_structure)
             warnings.extend(prepared_target.warnings)
+            pdb_chain_error = _pdb_export_chain_id_error(prepared_target)
+            if pdb_chain_error is not None:
+                errors.append(pdb_chain_error)
             if config.target_geometry_drift.enabled:
                 resolve_target_geometry_drift_indices(
                     prepared_target,
@@ -372,9 +375,6 @@ def check_campaign_config(
                     structure_indexing=config.target_structure.structure_indexing,
                     field_name="loss.target_geometry_drift.regions",
                 )
-            pdb_chain_error = _pdb_export_chain_id_error(prepared_target)
-            if pdb_chain_error is not None:
-                errors.append(pdb_chain_error)
         except StructureTargetError as exc:
             errors.append(str(exc))
 
@@ -513,7 +513,10 @@ def load_campaign_config(
         "loss.hotspot_loss_mode",
         HOTSPOT_LOSS_MODES,
     )
-    target_geometry_drift = _parse_target_geometry_drift(loss)
+    target_geometry_drift = _parse_target_geometry_drift(
+        loss,
+        has_target_structure=target_structure is not None,
+    )
     if target_geometry_drift.enabled and target_structure is None:
         raise ValueError("loss.target_geometry_drift requires target.structure")
     analysis = _parse_analysis_config(analysis_raw)
@@ -1009,14 +1012,18 @@ def _optional_float_with_alias(
     return float(default)
 
 
-def _parse_target_geometry_drift(raw_loss: dict[str, Any]) -> TargetGeometryDriftConfig:
+def _parse_target_geometry_drift(
+    raw_loss: dict[str, Any],
+    *,
+    has_target_structure: bool,
+) -> TargetGeometryDriftConfig:
     raw = raw_loss.get("target_geometry_drift")
     if raw is None:
-        return TargetGeometryDriftConfig()
+        return TargetGeometryDriftConfig(enabled=has_target_structure)
     if not isinstance(raw, dict):
         raise ValueError("loss.target_geometry_drift must be a mapping")
 
-    enabled = raw.get("enabled", False)
+    enabled = raw.get("enabled", has_target_structure)
     if not isinstance(enabled, bool):
         raise ValueError("loss.target_geometry_drift.enabled must be true or false")
 
@@ -1141,7 +1148,7 @@ def _parse_target_structure(
     if not isinstance(conditioning, dict):
         raise ValueError("target.conditioning must be a mapping")
     conditioning_mode = _parse_choice(
-        conditioning.get("mode", "none"),
+        conditioning.get("mode", "distogram"),
         "target.conditioning.mode",
         {"none", "distogram"},
     )

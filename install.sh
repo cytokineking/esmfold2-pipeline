@@ -31,6 +31,9 @@ Options:
                            torchvision>=0.26.0,torchaudio>=2.11.0
   --skip-protenix-checkpoint-download
                            Export the checkpoint directory without downloading weights.
+  --no-accelerators        Skip ESMFold2 accelerator packages
+                           (xformers and cuEquivariance).
+  --no-hmmer               Skip system HMMER install/check for VHH MSA validation.
   --no-protenix            Skip Protenix package install and Protenix checks.
   --no-check               Skip the final environment check.
   -h, --help               Show this help.
@@ -48,6 +51,9 @@ Environment overrides:
   ESMFOLD2_PROTENIX_CHECKPOINT_SHA256
   ESMFOLD2_PROTENIX_TORCH_SPECS
   ESMFOLD2_DOWNLOAD_PROTENIX_CHECKPOINT=0
+  ESMFOLD2_INSTALL_ACCELERATORS=0
+  ESMFOLD2_ACCELERATOR_SPECS
+  ESMFOLD2_INSTALL_HMMER=0
   ESMFOLD2_INSTALL_PROTENIX=0
 EOF
 }
@@ -76,6 +82,9 @@ PROTENIX_CHECKPOINT_URL="${ESMFOLD2_PROTENIX_CHECKPOINT_URL:-$DEFAULT_PROTENIX_C
 PROTENIX_CHECKPOINT_SHA256="${ESMFOLD2_PROTENIX_CHECKPOINT_SHA256:-$DEFAULT_PROTENIX_CHECKPOINT_SHA256}"
 PROTENIX_TORCH_SPECS_RAW="${ESMFOLD2_PROTENIX_TORCH_SPECS:-torch>=2.11.0,torchvision>=0.26.0,torchaudio>=2.11.0}"
 DOWNLOAD_PROTENIX_CHECKPOINT="${ESMFOLD2_DOWNLOAD_PROTENIX_CHECKPOINT:-1}"
+ACCELERATOR_SPECS_RAW="${ESMFOLD2_ACCELERATOR_SPECS:-xformers,cuequivariance,cuequivariance-torch,cuequivariance-ops-torch-cu12}"
+INSTALL_ACCELERATORS="${ESMFOLD2_INSTALL_ACCELERATORS:-1}"
+INSTALL_HMMER="${ESMFOLD2_INSTALL_HMMER:-1}"
 PRELOAD_MODELS=1
 RUN_CHECK=1
 INSTALL_PROTENIX="${ESMFOLD2_INSTALL_PROTENIX:-1}"
@@ -134,6 +143,14 @@ while [[ $# -gt 0 ]]; do
       DOWNLOAD_PROTENIX_CHECKPOINT=0
       shift
       ;;
+    --no-accelerators)
+      INSTALL_ACCELERATORS=0
+      shift
+      ;;
+    --no-hmmer)
+      INSTALL_HMMER=0
+      shift
+      ;;
     --no-protenix)
       INSTALL_PROTENIX=0
       shift
@@ -172,6 +189,9 @@ if [[ "$INSTALL_PROTENIX" -eq 1 && "$DOWNLOAD_PROTENIX_CHECKPOINT" -eq 1 && -z "
 fi
 if [[ "$INSTALL_PROTENIX" -eq 1 && -z "$PROTENIX_TORCH_SPECS_RAW" ]]; then
   die "--protenix-torch-specs must not be empty unless --no-protenix is set"
+fi
+if [[ "$INSTALL_ACCELERATORS" -eq 1 && -z "$ACCELERATOR_SPECS_RAW" ]]; then
+  die "ESMFOLD2_ACCELERATOR_SPECS must not be empty unless --no-accelerators is set"
 fi
 
 need_command() {
@@ -233,6 +253,38 @@ download_protenix_checkpoint() {
   fi
 
   mv "$tmp_file" "$checkpoint_file"
+}
+
+install_hmmer_if_needed() {
+  if command -v hmmscan >/dev/null 2>&1; then
+    log "using HMMER at $(command -v hmmscan)"
+    return
+  fi
+
+  if [[ "$INSTALL_HMMER" -ne 1 ]]; then
+    log "skipping HMMER install (--no-hmmer)"
+    return
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then
+    log "installing HMMER with apt-get"
+    if [[ "$EUID" -eq 0 ]]; then
+      apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y hmmer
+    elif command -v sudo >/dev/null 2>&1; then
+      sudo apt-get update
+      sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y hmmer
+    else
+      die "HMMER is missing and apt-get requires root; install hmmer or rerun with --no-hmmer"
+    fi
+  elif command -v brew >/dev/null 2>&1; then
+    log "installing HMMER with Homebrew"
+    brew install hmmer
+  else
+    die "HMMER is missing; install hmmer so hmmscan is on PATH or rerun with --no-hmmer"
+  fi
+
+  command -v hmmscan >/dev/null 2>&1 || die "HMMER install completed but hmmscan is not on PATH"
 }
 
 install_uv_if_needed() {
@@ -330,9 +382,36 @@ uv sync --python "$PYTHON_VERSION"
 log "installing ESM into the pipeline environment"
 uv pip install -e "$ESM_DIR"
 
+if [[ "$INSTALL_ACCELERATORS" -eq 1 ]]; then
+  log "installing ESMFold2 accelerator packages: $ACCELERATOR_SPECS_RAW"
+  mapfile -t ACCELERATOR_SPECS < <(split_model_list "$ACCELERATOR_SPECS_RAW")
+  uv pip install --upgrade "${ACCELERATOR_SPECS[@]}"
+else
+  log "skipping ESMFold2 accelerator packages (--no-accelerators)"
+fi
+
 if [[ "$INSTALL_PROTENIX" -eq 1 ]]; then
+  install_hmmer_if_needed
+
   log "installing VHH MSA numbering dependencies into the pipeline environment"
   uv pip install --upgrade abnumber anarcii
+  log "checking VHH MSA numbering dependencies"
+  if [[ "$INSTALL_HMMER" -eq 1 ]]; then
+    uv run python - <<'PY'
+import shutil
+
+import abnumber  # noqa: F401
+import anarcii  # noqa: F401
+
+if shutil.which("hmmscan") is None:
+    raise SystemExit("hmmscan is not on PATH")
+PY
+  else
+    uv run python - <<'PY'
+import abnumber  # noqa: F401
+import anarcii  # noqa: F401
+PY
+  fi
 
   PROTENIX_ENV="$(mkdir -p "$(dirname "$PROTENIX_ENV")" && cd "$(dirname "$PROTENIX_ENV")" && pwd)/$(basename "$PROTENIX_ENV")"
   log "creating separate Protenix environment at $PROTENIX_ENV"

@@ -50,7 +50,7 @@ output: /path/to/runs/my-campaign-n100
 | `structure_indexing` | no | `auto` | One of `auto`, `auth_seq_id`, `label_seq_id`. |
 | `crop` | no | none | Residue selectors to keep. List for one chain, or mapping by chain. |
 | `hotspots` | no | none | Chain-qualified residue selectors used for design steering and final hotspot gating. |
-| `conditioning.mode` | no | `none` | One of `none`, `distogram`. |
+| `conditioning.mode` | no | `distogram` for `target.structure`, otherwise `none` | One of `none`, `distogram`. Set `none` to disable structure conditioning for a structure-backed target. |
 | `conditioning.assembly` | no | `true` for explicitly multichain `distogram` targets, otherwise `false` | When true, condition selected target-target chain-pair distograms. Requires `mode: distogram`. |
 | `conditioning.chain_pairs` | no | `auto` | `auto` means all selected target-target pairs; otherwise list pairs such as `[[A, C]]`. |
 | `conditioning.representative_atom` | no | `esmfold2_default` | Uses CB except glycine CA, matching the current parser behavior. |
@@ -219,7 +219,7 @@ All loss fields are optional.
 | `hotspot_critic_contact_cutoff_angstrom` | `5.0` | Tight final heavy-atom contact cutoff used for hotspot pass/fail. |
 | `hotspot_num_contacts` | `1` | Number of binder contacts requested per hotspot residue in the loss. |
 | `hotspot_contact_probability_target` | `0.6` | Used by `probability_hinge`. |
-| `target_geometry_drift.enabled` | `false` | When true, add a soft hinge penalty for target-target distance drift from the input structure. Requires `target.structure`. |
+| `target_geometry_drift.enabled` | `true` for `target.structure`, otherwise `false` | When true, add a soft hinge penalty for target-target distance drift from the input structure. Requires `target.structure`. Set `false` to disable it for a structure-backed target. |
 | `target_geometry_drift.weight` | `2.5` | Multiplier for the target geometry drift hinge loss. |
 | `target_geometry_drift.tolerance_angstrom` | `0.1` | No drift penalty is applied below this target-target distance RMSE tolerance. |
 | `target_geometry_drift.stiffness_angstrom` | `0.1` | Violation scale for the linear hinge: `relu((distance_rmse - tolerance_angstrom) / stiffness_angstrom)`. Lower values make the penalty steeper. |
@@ -232,7 +232,7 @@ All loss fields are optional.
 adds a hotspot-masked entropy contact objective on top of the original ESMFold2
 structure losses.
 
-### Target geometry drift restriction (opt-in)
+### Target geometry drift restriction
 
 ```yaml
 loss:
@@ -243,9 +243,10 @@ loss:
     stiffness_angstrom: 0.1
 ```
 
-With no `regions`, the penalty applies to every selected target residue. To
-limit the penalty to specific target parts, use the same residue selector style
-as `target.crop` and `target.hotspots`:
+Structure-backed targets enable this penalty by default. With no `regions`, the
+penalty applies to every selected target residue. To limit the penalty to
+specific target parts, use the same residue selector style as `target.crop` and
+`target.hotspots`:
 
 ```yaml
 loss:
