@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 import os
 import shlex
 import sys
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
 import yaml
 
@@ -30,6 +31,8 @@ from esmfold2_pipeline.execution import (
     run_one_gpu_smoke_shard,
     run_one_mock_shard,
 )
+
+_LOCAL_RUNTIME_CACHE_DISABLE_ENV = "ESMFOLD2_PIPELINE_DISABLE_LOCAL_RUNTIME_CACHE"
 from esmfold2_pipeline.frameworks import (
     all_scfv_framework_names,
     all_vhh_framework_names,
@@ -240,6 +243,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--enable-hf-xet",
         action="store_true",
         help="do not force HF_HUB_DISABLE_XET=1 during model loading",
+    )
+    launch.add_argument(
+        "--disable-local-runtime-cache",
+        action="store_true",
+        default=False,
+        help="reload local ESMFold2/ESMC runtime for each design shard",
     )
     launch.add_argument(
         "--target-name",
@@ -454,6 +463,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="do not force HF_HUB_DISABLE_XET=1 during model loading",
     )
     run.add_argument(
+        "--disable-local-runtime-cache",
+        action="store_true",
+        default=False,
+        help="reload local ESMFold2/ESMC runtime for each design shard",
+    )
+    run.add_argument(
         "--stale-timeout",
         type=float,
         default=None,
@@ -515,6 +530,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--enable-hf-xet",
         action="store_true",
         help="do not set HF_HUB_DISABLE_XET=1 in worker processes",
+    )
+    run_multi.add_argument(
+        "--disable-local-runtime-cache",
+        action="store_true",
+        default=False,
+        help="reload local ESMFold2/ESMC runtime for each design shard",
     )
     run_multi.set_defaults(func=_run_multi_campaign)
 
@@ -1298,6 +1319,9 @@ def _run_launch_pipeline(campaign_dir: Path, args: argparse.Namespace) -> int:
                 heartbeat_interval_seconds=args.heartbeat_interval,
                 stale_after_seconds=args.stale_timeout,
                 disable_hf_xet=not args.enable_hf_xet,
+                disable_local_runtime_cache=getattr(
+                    args, "disable_local_runtime_cache", False
+                ),
             )
         _print_run_multi_result(result)
         _print_launch_validation_msa_result(msa_pool)
@@ -1312,16 +1336,17 @@ def _run_launch_pipeline(campaign_dir: Path, args: argparse.Namespace) -> int:
         flush=True,
     )
     with msa_pool:
-        result = run_campaign(
-            campaign_dir,
-            esm_repo=args.esm_repo,
-            worker_id="local-worker-0",
-            gpu_id=args.gpu_id,
-            max_shards=args.max_shards,
-            heartbeat_interval_seconds=args.heartbeat_interval,
-            stale_after_seconds=args.stale_timeout,
-            disable_hf_xet=not args.enable_hf_xet,
-        )
+        with _local_runtime_cache_disabled_if_requested(args):
+            result = run_campaign(
+                campaign_dir,
+                esm_repo=args.esm_repo,
+                worker_id="local-worker-0",
+                gpu_id=args.gpu_id,
+                max_shards=args.max_shards,
+                heartbeat_interval_seconds=args.heartbeat_interval,
+                stale_after_seconds=args.stale_timeout,
+                disable_hf_xet=not args.enable_hf_xet,
+            )
     _print_run_campaign_result(result)
     _print_launch_validation_msa_result(msa_pool)
     return _run_launch_final_steps(campaign_dir, args)
@@ -1878,16 +1903,17 @@ def _run_campaign(args: argparse.Namespace) -> int:
         file=sys.stderr,
         flush=True,
     )
-    result = run_campaign(
-        args.campaign_dir,
-        esm_repo=args.esm_repo,
-        worker_id=args.worker_id,
-        gpu_id=args.gpu_id,
-        max_shards=args.max_shards,
-        heartbeat_interval_seconds=args.heartbeat_interval,
-        stale_after_seconds=args.stale_timeout,
-        disable_hf_xet=not args.enable_hf_xet,
-    )
+    with _local_runtime_cache_disabled_if_requested(args):
+        result = run_campaign(
+            args.campaign_dir,
+            esm_repo=args.esm_repo,
+            worker_id=args.worker_id,
+            gpu_id=args.gpu_id,
+            max_shards=args.max_shards,
+            heartbeat_interval_seconds=args.heartbeat_interval,
+            stale_after_seconds=args.stale_timeout,
+            disable_hf_xet=not args.enable_hf_xet,
+        )
     _print_run_campaign_result(result)
     return 0
 
@@ -1925,10 +1951,35 @@ def _run_multi_campaign(args: argparse.Namespace) -> int:
             heartbeat_interval_seconds=args.heartbeat_interval,
             stale_after_seconds=args.stale_timeout,
             disable_hf_xet=not args.enable_hf_xet,
+            disable_local_runtime_cache=getattr(
+                args, "disable_local_runtime_cache", False
+            ),
         )
     _print_run_multi_result(result)
     _print_launch_validation_msa_result(msa_pool)
     return 0 if result.ok else 1
+
+
+def _local_runtime_cache_disabled_if_requested(
+    args: argparse.Namespace,
+) -> AbstractContextManager[None]:
+    if not getattr(args, "disable_local_runtime_cache", False):
+        return nullcontext()
+    return _temporary_env(_LOCAL_RUNTIME_CACHE_DISABLE_ENV, "1")
+
+
+@contextmanager
+def _temporary_env(name: str, value: str) -> Iterator[None]:
+    sentinel = object()
+    previous = os.environ.get(name, sentinel)
+    os.environ[name] = value
+    try:
+        yield
+    finally:
+        if previous is sentinel:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = previous
 
 
 def _run_multi_validation_msa_worker_pool(

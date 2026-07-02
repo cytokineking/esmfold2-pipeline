@@ -65,8 +65,39 @@ _TEMPLATE_DISTOGRAM_INJECTION_DISABLE_ENV = (
 )
 _TEMPLATE_DISTOGRAM_LOG_KEYS_ATTR = "_esmfold2_pipeline_template_distogram_log_keys"
 _DESIGN_BACKEND_ENV = "ESMFOLD2_PIPELINE_DESIGN_BACKEND"
+_LOCAL_RUNTIME_CACHE_DISABLE_ENV = "ESMFOLD2_PIPELINE_DISABLE_LOCAL_RUNTIME_CACHE"
 _SUPPORTED_DESIGN_BACKENDS = {"tutorial", "local"}
 _LOCAL_ESMC_CACHE: Any | None = None
+_LOCAL_INVERSION_LM_DROPOUT = 0.5
+_LOCAL_CRITIC_LM_DROPOUT = 0.25
+_LOCAL_MODEL_DEVICE = "cuda"
+_LOCAL_MODEL_CACHE_ESMC = True
+
+
+@dataclass(frozen=True)
+class _LocalModelLoadSpec:
+    model_name: str
+    lm_dropout: float
+    cache_esmc: bool
+    device: str
+
+
+@dataclass(frozen=True)
+class _LocalRuntimeCacheKey:
+    esm_repo: str | None
+    gpu_id: str | None
+    cuda_visible_devices: str | None
+    inversion_model: _LocalModelLoadSpec
+    critic_model: _LocalModelLoadSpec
+
+
+@dataclass(frozen=True)
+class _LocalDesignRuntime:
+    binder_design: Any
+    runtime_models: RuntimeModels
+
+
+_LOCAL_DESIGN_RUNTIME_CACHE: dict[_LocalRuntimeCacheKey, _LocalDesignRuntime] = {}
 
 
 @dataclass(frozen=True)
@@ -342,16 +373,9 @@ def _run_local_design(
             "local design backend requires a local binder prompt sequence"
         )
 
-    _progress("loading ESM runtime helpers for local design")
-    binder_design = load_esm_folding_runtime(spec.esm_repo)
-    _progress("loading ESMFold2/ESMC models for local design loop")
-    runtime_models = _load_local_runtime_models(
-        binder_design,
-        inversion_model_name=(
-            spec.inversion_model_name or DEFAULT_ESMFOLD2_INVERSION_MODEL
-        ),
-        critic_name=spec.critic_name,
-    )
+    runtime = _get_or_load_local_design_runtime(spec)
+    binder_design = runtime.binder_design
+    runtime_models = runtime.runtime_models
     target_sequence = target_sequence_for_design
     if target_sequence is None:
         if spec.target_name is None:
@@ -1221,30 +1245,40 @@ def _load_local_runtime_models(
     inversion_model_name: str,
     critic_name: str,
 ) -> RuntimeModels:
+    inversion_spec, critic_spec = _local_model_load_specs(
+        inversion_model_name=inversion_model_name,
+        critic_name=critic_name,
+    )
+    loaded_models: dict[_LocalModelLoadSpec, Any] = {}
+
+    def load_model(model_spec: _LocalModelLoadSpec):
+        if model_spec not in loaded_models:
+            loaded_models[model_spec] = _load_local_hf_esmfold2_model(
+                binder_design,
+                model_spec.model_name,
+                lm_dropout=model_spec.lm_dropout,
+                cache_esmc=model_spec.cache_esmc,
+                device=model_spec.device,
+            )
+        return loaded_models[model_spec]
+
     inversion_models = {
-        inversion_model_name: _load_local_hf_esmfold2_model(
-            binder_design,
-            inversion_model_name,
-            lm_dropout=0.5,
-            cache_esmc=True,
-            device="cuda",
-        )
+        inversion_model_name: load_model(inversion_spec),
     }
     critic_models = {
-        critic_name: _load_local_hf_esmfold2_model(
-            binder_design,
-            critic_name,
-            lm_dropout=0.25,
-            cache_esmc=True,
-            device="cuda",
-        )
+        critic_name: load_model(critic_spec),
     }
     if getattr(binder_design, "COMPILE", False):
         compile_model = getattr(binder_design, "_apply_torch_compile", None)
         if compile_model is None:
             raise RuntimeError("ESM runtime requested COMPILE but has no compiler hook")
+        compiled_model_ids: set[int] = set()
         for model in inversion_models.values():
+            model_id = id(model)
+            if model_id in compiled_model_ids:
+                continue
             compile_model(model)
+            compiled_model_ids.add(model_id)
 
     esmc_model = binder_design.ESMCForMaskedLM.from_pretrained(
         "biohub/ESMC-6B",
@@ -1256,6 +1290,89 @@ def _load_local_runtime_models(
         critic_models=critic_models,
         esmc_model=esmc_model,
         helpers={},
+    )
+
+
+def _get_or_load_local_design_runtime(spec: DesignSpec) -> _LocalDesignRuntime:
+    if _local_runtime_cache_disabled():
+        _progress("local ESMFold2/ESMC runtime cache disabled for this process")
+        return _load_local_design_runtime(spec)
+
+    key = _local_runtime_cache_key(spec)
+    cached = _LOCAL_DESIGN_RUNTIME_CACHE.get(key)
+    if cached is not None:
+        _progress(
+            "using cached ESMFold2/ESMC models for local design loop "
+            f"gpu={spec.gpu_id or os.environ.get('CUDA_VISIBLE_DEVICES') or 'default'}"
+        )
+        return cached
+
+    runtime = _load_local_design_runtime(spec)
+    _LOCAL_DESIGN_RUNTIME_CACHE[key] = runtime
+    return runtime
+
+
+def _load_local_design_runtime(spec: DesignSpec) -> _LocalDesignRuntime:
+    _progress("loading ESM runtime helpers for local design")
+    binder_design = load_esm_folding_runtime(spec.esm_repo)
+    _progress("loading ESMFold2/ESMC models for local design loop")
+    runtime_models = _load_local_runtime_models(
+        binder_design,
+        inversion_model_name=(
+            spec.inversion_model_name or DEFAULT_ESMFOLD2_INVERSION_MODEL
+        ),
+        critic_name=spec.critic_name,
+    )
+    return _LocalDesignRuntime(
+        binder_design=binder_design,
+        runtime_models=runtime_models,
+    )
+
+
+def _local_runtime_cache_disabled() -> bool:
+    value = os.environ.get(_LOCAL_RUNTIME_CACHE_DISABLE_ENV, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _local_runtime_cache_key(spec: DesignSpec) -> _LocalRuntimeCacheKey:
+    inversion_model_name = spec.inversion_model_name or DEFAULT_ESMFOLD2_INVERSION_MODEL
+    inversion_spec, critic_spec = _local_model_load_specs(
+        inversion_model_name=inversion_model_name,
+        critic_name=spec.critic_name,
+    )
+    return _LocalRuntimeCacheKey(
+        esm_repo=_local_runtime_esm_repo_key(spec.esm_repo),
+        gpu_id=str(spec.gpu_id) if spec.gpu_id is not None else None,
+        cuda_visible_devices=os.environ.get("CUDA_VISIBLE_DEVICES"),
+        inversion_model=inversion_spec,
+        critic_model=critic_spec,
+    )
+
+
+def _local_runtime_esm_repo_key(esm_repo: str | Path | None) -> str | None:
+    if esm_repo is None:
+        return None
+    return str(Path(esm_repo).expanduser().resolve())
+
+
+def _local_model_load_specs(
+    *,
+    inversion_model_name: str,
+    critic_name: str,
+) -> tuple[_LocalModelLoadSpec, _LocalModelLoadSpec]:
+    return (
+        _LocalModelLoadSpec(
+            model_name=inversion_model_name,
+            lm_dropout=_LOCAL_INVERSION_LM_DROPOUT,
+            cache_esmc=_LOCAL_MODEL_CACHE_ESMC,
+            device=_LOCAL_MODEL_DEVICE,
+        ),
+        _LocalModelLoadSpec(
+            model_name=critic_name,
+            lm_dropout=_LOCAL_CRITIC_LM_DROPOUT,
+            cache_esmc=_LOCAL_MODEL_CACHE_ESMC,
+            device=_LOCAL_MODEL_DEVICE,
+        ),
     )
 
 

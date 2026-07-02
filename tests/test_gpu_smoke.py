@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 import types
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -13,7 +13,7 @@ import numpy as np
 import esmfold2_pipeline.esm_adapter.binder_design as adapter_module
 from esmfold2_pipeline.config import TargetGeometryDriftConfig
 from esmfold2_pipeline.db import CampaignStore, connect_database
-from esmfold2_pipeline.design import DesignRunResult
+from esmfold2_pipeline.design import DesignRunResult, RuntimeModels
 from esmfold2_pipeline.esm_adapter import preflight_models, run_binder_design_artifact
 from esmfold2_pipeline.execution.gpu_smoke import (
     DEFAULT_CRITIC_NAME,
@@ -71,6 +71,49 @@ class FakeDesignApp:
 
 
 class GPUSmokeTest(unittest.TestCase):
+    def setUp(self) -> None:
+        adapter_module._LOCAL_DESIGN_RUNTIME_CACHE.clear()
+
+    def _runtime_cache_test_spec(self, *, gpu_id: str = "0"):
+        return adapter_module._build_design_spec(
+            campaign_dir=Path("/tmp/campaign"),
+            candidate_id="candidate",
+            shard_id="shard",
+            seed=0,
+            esm_repo="/tmp/esm",
+            gpu_id=gpu_id,
+            steps=1,
+            target_name="target",
+            binder_name="minibinder",
+            critic_name="critic-model",
+            binder_scaffold=None,
+            binder_framework_name=None,
+            binder_framework_source=None,
+            binder_framework_template=None,
+            binder_framework_cdr_lengths=None,
+            binder_framework_sequence=None,
+            binder_framework_cdr_indices=None,
+            target_sequence=None,
+            binder_length_range=(2, 2),
+            is_antibody=False,
+            inversion_model_name="inv-model",
+            structure_target=None,
+            target_structure_indexing="auto",
+            conditioning_mode="none",
+            conditioning_assembly=False,
+            conditioning_chain_pairs=None,
+            hotspot_contact_weight=0.0,
+            hotspot_contact_cutoff_angstrom=None,
+            hotspot_distogram_contact_cutoff_angstrom=20.0,
+            hotspot_critic_contact_cutoff_angstrom=5.0,
+            hotspot_num_contacts=1,
+            hotspot_contact_probability_target=0.6,
+            hotspot_loss_mode="entropy_hotspot",
+            target_geometry_drift=None,
+            artifact_stem=None,
+            disable_hf_xet=True,
+        )
+
     def test_gpu_smoke_keeps_heavy_result_inside_worker_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             campaign_dir = Path(tmpdir)
@@ -293,6 +336,237 @@ class GPUSmokeTest(unittest.TestCase):
         self.assertTrue(runtime.esmc_model.cuda_called)
         self.assertTrue(runtime.esmc_model.eval_called)
         self.assertEqual(runtime.esmc_model.requires_grad_calls, [False])
+
+
+    def test_local_design_runtime_cache_reuses_worker_models(self) -> None:
+        loaded_runtime = object()
+        loaded_models = RuntimeModels(
+            inversion_models={"inv-model": object()},
+            critic_models={"critic-model": object()},
+            esmc_model=object(),
+            helpers={},
+        )
+        spec = self._runtime_cache_test_spec()
+
+        with patch.dict("os.environ", {"CUDA_VISIBLE_DEVICES": "0"}), patch(
+            "esmfold2_pipeline.esm_adapter.binder_design.load_esm_folding_runtime",
+            return_value=loaded_runtime,
+        ) as load_runtime, patch(
+            "esmfold2_pipeline.esm_adapter.binder_design._load_local_runtime_models",
+            return_value=loaded_models,
+        ) as load_models:
+            first = adapter_module._get_or_load_local_design_runtime(spec)
+            second = adapter_module._get_or_load_local_design_runtime(spec)
+
+        self.assertIs(first, second)
+        self.assertIs(first.binder_design, loaded_runtime)
+        self.assertIs(first.runtime_models, loaded_models)
+        load_runtime.assert_called_once_with("/tmp/esm")
+        load_models.assert_called_once_with(
+            loaded_runtime,
+            inversion_model_name="inv-model",
+            critic_name="critic-model",
+        )
+
+    def test_local_design_runtime_cache_can_be_disabled_by_env(self) -> None:
+        loaded_models = RuntimeModels(
+            inversion_models={"inv-model": object()},
+            critic_models={"critic-model": object()},
+            esmc_model=object(),
+            helpers={},
+        )
+        spec = self._runtime_cache_test_spec()
+
+        with patch.dict(
+            "os.environ",
+            {
+                "CUDA_VISIBLE_DEVICES": "0",
+                "ESMFOLD2_PIPELINE_DISABLE_LOCAL_RUNTIME_CACHE": "1",
+            },
+        ), patch(
+            "esmfold2_pipeline.esm_adapter.binder_design.load_esm_folding_runtime",
+            side_effect=[object(), object()],
+        ) as load_runtime, patch(
+            "esmfold2_pipeline.esm_adapter.binder_design._load_local_runtime_models",
+            return_value=loaded_models,
+        ) as load_models:
+            first = adapter_module._get_or_load_local_design_runtime(spec)
+            second = adapter_module._get_or_load_local_design_runtime(spec)
+
+        self.assertIsNot(first, second)
+        self.assertEqual(load_runtime.call_count, 2)
+        self.assertEqual(load_models.call_count, 2)
+        self.assertEqual(adapter_module._LOCAL_DESIGN_RUNTIME_CACHE, {})
+
+    def test_local_design_runtime_cache_separates_gpu_bindings(self) -> None:
+        spec = self._runtime_cache_test_spec()
+        loaded_models = RuntimeModels(
+            inversion_models={"inv-model": object()},
+            critic_models={"critic-model": object()},
+            esmc_model=object(),
+            helpers={},
+        )
+
+        with patch(
+            "esmfold2_pipeline.esm_adapter.binder_design.load_esm_folding_runtime",
+            side_effect=[object(), object()],
+        ) as load_runtime, patch(
+            "esmfold2_pipeline.esm_adapter.binder_design._load_local_runtime_models",
+            return_value=loaded_models,
+        ) as load_models:
+            with patch.dict("os.environ", {"CUDA_VISIBLE_DEVICES": "0"}):
+                adapter_module._get_or_load_local_design_runtime(spec)
+            with patch.dict("os.environ", {"CUDA_VISIBLE_DEVICES": "1"}):
+                adapter_module._get_or_load_local_design_runtime(
+                    replace(spec, gpu_id="1")
+                )
+
+        self.assertEqual(load_runtime.call_count, 2)
+        self.assertEqual(load_models.call_count, 2)
+
+    def test_local_runtime_model_loader_dedupes_identical_model_specs(self) -> None:
+        fold_from_pretrained_calls: list[tuple[str, bool]] = []
+        fold_instances: list[object] = []
+
+        class FakeFoldModel:
+            def __init__(self) -> None:
+                self.config = types.SimpleNamespace(esmc_id="esmc")
+                self._esmc = None
+
+            @classmethod
+            def from_pretrained(cls, repo_id: str, *, load_esmc: bool):
+                fold_from_pretrained_calls.append((repo_id, load_esmc))
+                instance = cls()
+                fold_instances.append(instance)
+                return instance
+
+            def load_esmc(self, esmc_id: str) -> None:
+                self._esmc = object()
+
+            def configure_lm_dropout(self, *args, **kwargs):
+                return None
+
+            def set_kernel_backend(self, backend):
+                return None
+
+            def to(self, *, device: str):
+                return self
+
+            def eval(self):
+                return self
+
+            def requires_grad_(self, requires_grad: bool):
+                return self
+
+        class FakeESMCModel:
+            def cuda(self):
+                return self
+
+            def eval(self):
+                return self
+
+            def requires_grad_(self, requires_grad: bool):
+                return self
+
+        class FakeESMCForMaskedLM:
+            @staticmethod
+            def from_pretrained(repo_id: str, *, torch_dtype):
+                return FakeESMCModel()
+
+        fake_module = types.SimpleNamespace(
+            ESMFold2ExperimentalModel=FakeFoldModel,
+            ESMCForMaskedLM=FakeESMCForMaskedLM,
+            torch=types.SimpleNamespace(float32="float32"),
+            CUE_AVAILABLE=False,
+            COMPILE=False,
+        )
+        old_esmc_cache = adapter_module._LOCAL_ESMC_CACHE
+        adapter_module._LOCAL_ESMC_CACHE = None
+        try:
+            with patch.object(adapter_module, "_LOCAL_CRITIC_LM_DROPOUT", 0.5):
+                runtime = adapter_module._load_local_runtime_models(
+                    fake_module,
+                    inversion_model_name="same-model",
+                    critic_name="same-model",
+                )
+        finally:
+            adapter_module._LOCAL_ESMC_CACHE = old_esmc_cache
+
+        self.assertEqual(
+            fold_from_pretrained_calls,
+            [("biohub/same-model", False)],
+        )
+        self.assertIs(runtime.inversion_models["same-model"], fold_instances[0])
+        self.assertIs(runtime.critic_models["same-model"], fold_instances[0])
+
+    def test_local_runtime_model_loader_keeps_different_model_specs_separate(self) -> None:
+        fold_from_pretrained_calls: list[tuple[str, bool]] = []
+
+        class FakeFoldModel:
+            def __init__(self) -> None:
+                self.config = types.SimpleNamespace(esmc_id="esmc")
+                self._esmc = None
+
+            @classmethod
+            def from_pretrained(cls, repo_id: str, *, load_esmc: bool):
+                fold_from_pretrained_calls.append((repo_id, load_esmc))
+                return cls()
+
+            def load_esmc(self, esmc_id: str) -> None:
+                self._esmc = object()
+
+            def configure_lm_dropout(self, *args, **kwargs):
+                return None
+
+            def set_kernel_backend(self, backend):
+                return None
+
+            def to(self, *, device: str):
+                return self
+
+            def eval(self):
+                return self
+
+            def requires_grad_(self, requires_grad: bool):
+                return self
+
+        class FakeESMCModel:
+            def cuda(self):
+                return self
+
+            def eval(self):
+                return self
+
+            def requires_grad_(self, requires_grad: bool):
+                return self
+
+        class FakeESMCForMaskedLM:
+            @staticmethod
+            def from_pretrained(repo_id: str, *, torch_dtype):
+                return FakeESMCModel()
+
+        fake_module = types.SimpleNamespace(
+            ESMFold2ExperimentalModel=FakeFoldModel,
+            ESMCForMaskedLM=FakeESMCForMaskedLM,
+            torch=types.SimpleNamespace(float32="float32"),
+            CUE_AVAILABLE=False,
+            COMPILE=False,
+        )
+        old_esmc_cache = adapter_module._LOCAL_ESMC_CACHE
+        adapter_module._LOCAL_ESMC_CACHE = None
+        try:
+            adapter_module._load_local_runtime_models(
+                fake_module,
+                inversion_model_name="same-model",
+                critic_name="same-model",
+            )
+        finally:
+            adapter_module._LOCAL_ESMC_CACHE = old_esmc_cache
+
+        self.assertEqual(
+            fold_from_pretrained_calls,
+            [("biohub/same-model", False), ("biohub/same-model", False)],
+        )
 
     def test_model_preflight_uses_local_runtime_by_default(self) -> None:
         fake_runtime = object()

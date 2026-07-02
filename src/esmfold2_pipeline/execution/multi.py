@@ -84,6 +84,7 @@ def run_multi_campaign(
     stale_after_seconds: float | None = None,
     python_executable: str | Path | None = None,
     disable_hf_xet: bool = True,
+    disable_local_runtime_cache: bool = False,
     extra_env: Mapping[str, str] | None = None,
     worker_subcommand: str = "run",
 ) -> RunMultiCampaignResult:
@@ -128,6 +129,7 @@ def run_multi_campaign(
                 max_shards_per_worker=max_shards_per_worker,
                 heartbeat_interval_seconds=heartbeat_interval_seconds,
                 disable_hf_xet=disable_hf_xet,
+                disable_local_runtime_cache=disable_local_runtime_cache,
             )
             env = _worker_env(
                 gpu_id=gpu_id,
@@ -288,6 +290,7 @@ def _worker_command(
     max_shards_per_worker: int | None,
     heartbeat_interval_seconds: float,
     disable_hf_xet: bool,
+    disable_local_runtime_cache: bool,
 ) -> list[str]:
     command = [
         executable,
@@ -308,6 +311,8 @@ def _worker_command(
         command.extend(["--heartbeat-interval", str(heartbeat_interval_seconds)])
         if not disable_hf_xet:
             command.append("--enable-hf-xet")
+        if disable_local_runtime_cache:
+            command.append("--disable-local-runtime-cache")
     return command
 
 

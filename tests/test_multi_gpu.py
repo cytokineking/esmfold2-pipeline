@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from esmfold2_pipeline.db import CampaignStore, connect_database
 from esmfold2_pipeline.execution import run_multi_campaign
+from esmfold2_pipeline.execution.multi import _worker_command
 from esmfold2_pipeline.execution.mock_worker import (
     plan_one_mock_shard,
     run_one_mock_shard,
@@ -158,6 +159,22 @@ class MultiGPUExecutorTest(unittest.TestCase):
             self.assertEqual(result.failed_workers, 1)
             self.assertEqual(result.worker_results[0].returncode, 1)
             self.assertEqual(result.worker_results[0].recovered_shards, 0)
+
+    def test_worker_command_can_disable_local_runtime_cache(self) -> None:
+        command = _worker_command(
+            executable=sys.executable,
+            worker_subcommand="run",
+            campaign_dir=Path("/tmp/campaign"),
+            worker_id="worker-0",
+            gpu_id="0",
+            esm_repo=Path("/tmp/esm"),
+            max_shards_per_worker=1,
+            heartbeat_interval_seconds=30.0,
+            disable_hf_xet=True,
+            disable_local_runtime_cache=True,
+        )
+
+        self.assertIn("--disable-local-runtime-cache", command)
 
 
 class FailedWorkerRecoveryTest(unittest.TestCase):

@@ -547,6 +547,7 @@ output: {root / "campaign"}
                 heartbeat_interval=30.0,
                 stale_timeout=None,
                 enable_hf_xet=False,
+                disable_local_runtime_cache=True,
                 validation_msa_workers=None,
                 validation_msa_poll_interval=0.25,
                 msa_max_requests_per_minute=7.0,
@@ -568,6 +569,9 @@ output: {root / "campaign"}
             self.assertTrue(captured["entered"])
             self.assertTrue(captured["exited"])
             run_multi_campaign.assert_called_once()
+            self.assertTrue(
+                run_multi_campaign.call_args.kwargs["disable_local_runtime_cache"]
+            )
 
     def test_validation_run_defaults_to_max_batch_size_ten(self) -> None:
         args = argparse.Namespace(campaign_dir=Path("/tmp/campaign"))
@@ -1982,6 +1986,7 @@ def _launch_args(**overrides) -> argparse.Namespace:
         "heartbeat_interval": 30.0,
         "stale_timeout": None,
         "enable_hf_xet": False,
+        "disable_local_runtime_cache": False,
         "validation_msa_workers": None,
         "validation_msa_poll_interval": 0.01,
         "msa_max_requests_per_minute": 5.0,
