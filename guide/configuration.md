@@ -14,7 +14,7 @@ the field-level reference.
 | `binder` | yes | Binder scaffold definition. |
 | `campaign` | yes | Number of designs, model names, and steps. |
 | `output` | yes | Campaign directory. Can be overridden with `--out` on `check`, `plan`, or `launch CONFIG`. |
-| `loss` | no | Hotspot loss settings. Defaults are shown below. |
+| `loss` | no | Hotspot, contact-mode, and target-geometry loss settings. Defaults are shown below. |
 | `validation` | no | Optional Protenix validation and automatic MSA settings. See [the validation section](#validation) and [Validation](validation.md). |
 
 Minimal direct-sequence example:
@@ -219,6 +219,14 @@ All loss fields are optional.
 | `hotspot_critic_contact_cutoff_angstrom` | `5.0` | Tight final heavy-atom contact cutoff used for hotspot pass/fail. |
 | `hotspot_num_contacts` | `1` | Number of binder contacts requested per hotspot residue in the loss. |
 | `hotspot_contact_probability_target` | `0.6` | Used by `probability_hinge`. |
+| `binder_target_contact_mode` | `legacy` | `legacy` keeps the original whole-binder target attraction. `mosaic_cdr` is scFv/VHH-only and replaces that attraction with a CDR-scoped Mosaic-style contact loss. |
+| `mosaic_cdr_contact_weight` | `0.5` | Weight for the Mosaic-style CDR-to-target entropy contact loss. Used only with `binder_target_contact_mode: mosaic_cdr`. |
+| `mosaic_cdr_contact_cutoff_angstrom` | `22.0` | Design-time distogram cutoff for the Mosaic-style CDR contact loss. |
+| `mosaic_cdr_num_target_contacts` | `3` | Number of target contacts averaged per CDR residue in the Mosaic-style contact loss and framework penalty diagnostics. |
+| `mosaic_framework_contact_penalty_weight` | `0.0` | Optional penalty for framework-to-target contacts in Mosaic CDR mode. The default keeps the penalty off; `1.0` is a reasonable starting value when enabling it. |
+| `mosaic_framework_contact_penalty_cutoff_angstrom` | `22.0` | Distogram cutoff used for the optional framework contact penalty. |
+| `mosaic_framework_contact_probability_threshold` | `0.2` | Framework contact probability threshold below which no penalty is applied. |
+| `mosaic_framework_contact_penalty_scope` | `auto` | One of `auto`, `hotspot`, `target_all`; controls which target residues are penalized for framework contact. |
 | `target_geometry_drift.enabled` | `true` for `target.structure`, otherwise `false` | When true, add a soft hinge penalty for target-target distance drift from the input structure. Requires `target.structure`. Set `false` to disable it for a structure-backed target. |
 | `target_geometry_drift.weight` | `2.5` | Multiplier for the target geometry drift hinge loss. |
 | `target_geometry_drift.tolerance_angstrom` | `0.1` | No drift penalty is applied below this target-target distance RMSE tolerance. |
@@ -228,9 +236,58 @@ All loss fields are optional.
 `hotspot_contact_cutoff_angstrom` is accepted as a compatibility alias for
 `hotspot_critic_contact_cutoff_angstrom`.
 
-`entropy_hotspot` is the recommended default when hotspots are supplied. It
-adds a hotspot-masked entropy contact objective on top of the original ESMFold2
-structure losses.
+In `legacy` mode, `entropy_hotspot` is the recommended default when hotspots are
+supplied. It adds a hotspot-masked entropy contact objective on top of the
+original ESMFold2 structure losses.
+
+For scFv and VHH campaigns, `binder_target_contact_mode: mosaic_cdr` replaces
+the original whole-binder target attraction with a Mosaic-style entropy contact
+loss whose binder rows are restricted to CDR residues. If `target.hotspots` are
+omitted, the CDRs are encouraged to contact any target residue. If
+`target.hotspots` are configured, the CDRs are encouraged to contact those
+hotspot residues. The Mosaic CDR contact loss does not use
+`hotspot_contact_probability_target`; that field only applies to the legacy
+`probability_hinge` hotspot mode.
+
+In `mosaic_cdr` mode, `target.hotspots` is the target-side mask for the CDR
+attraction. The legacy design-time hotspot knobs
+(`hotspot_loss_mode`, `hotspot_contact_weight`,
+`hotspot_distogram_contact_cutoff_angstrom`, and `hotspot_num_contacts`) do not
+add a second hotspot attraction. `hotspot_critic_contact_cutoff_angstrom` still
+controls final hotspot pass/fail reporting and selection when hotspot gating is
+enabled.
+
+The framework contact penalty is an optional extension to Mosaic CDR mode. It is
+off by default. When enabled, framework residues are binder residues outside the
+CDR set. For each framework residue, the loss looks at the top
+`mosaic_cdr_num_target_contacts` contact probabilities below
+`mosaic_framework_contact_penalty_cutoff_angstrom` and applies
+`mean(relu(score - threshold)^2)`, scaled by
+`mosaic_framework_contact_penalty_weight`. A practical first enabled value is
+`1.0`; treat it as a sweep parameter if framework contacts remain common or CDR
+binding becomes too constrained.
+
+`mosaic_framework_contact_penalty_scope` controls only the optional framework
+penalty target mask:
+
+- `auto`: if hotspots exist, penalize framework-to-hotspot contact; otherwise,
+  penalize framework-to-any-target contact.
+- `hotspot`: penalize framework-to-hotspot contact and fail if the penalty is
+  enabled without hotspots.
+- `target_all`: penalize framework-to-any-target contact even when hotspots are
+  configured.
+
+Example Mosaic CDR VHH/scFv loss block:
+
+```yaml
+loss:
+  binder_target_contact_mode: mosaic_cdr
+  mosaic_cdr_contact_weight: 0.5
+  mosaic_cdr_contact_cutoff_angstrom: 22.0
+  mosaic_cdr_num_target_contacts: 3
+  mosaic_framework_contact_penalty_weight: 1.0
+  mosaic_framework_contact_penalty_scope: target_all
+```
 
 ### Target geometry drift restriction
 

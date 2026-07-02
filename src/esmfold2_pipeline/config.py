@@ -42,11 +42,21 @@ DEFAULT_HOTSPOT_LOSS_MODE = "entropy_hotspot"
 DEFAULT_HOTSPOT_CONTACT_WEIGHT = 2.0
 DEFAULT_HOTSPOT_DISTOGRAM_CONTACT_CUTOFF_ANGSTROM = 20.0
 DEFAULT_HOTSPOT_CRITIC_CONTACT_CUTOFF_ANGSTROM = 5.0
+DEFAULT_BINDER_TARGET_CONTACT_MODE = "legacy"
+DEFAULT_MOSAIC_CDR_CONTACT_WEIGHT = 0.5
+DEFAULT_MOSAIC_CDR_CONTACT_CUTOFF_ANGSTROM = 22.0
+DEFAULT_MOSAIC_CDR_NUM_TARGET_CONTACTS = 3
+DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_WEIGHT = 0.0
+DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_CUTOFF_ANGSTROM = 22.0
+DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PROBABILITY_THRESHOLD = 0.2
+DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPE = "auto"
 DEFAULT_TARGET_GEOMETRY_DRIFT_WEIGHT = 2.5
 DEFAULT_TARGET_GEOMETRY_DRIFT_TOLERANCE_ANGSTROM = 0.1
 DEFAULT_TARGET_GEOMETRY_DRIFT_STIFFNESS_ANGSTROM = 0.1
 DEFAULT_ANALYSIS_TOP_K = 25
 HOTSPOT_LOSS_MODES = {"entropy_hotspot", "probability_hinge"}
+BINDER_TARGET_CONTACT_MODES = {"legacy", "mosaic_cdr"}
+MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPES = {"auto", "hotspot", "target_all"}
 DEFAULT_MINIPROTEIN_LENGTH_RANGE = (60, 200)
 MINIPROTEIN_SCAFFOLD = "miniprotein"
 SCFV_SCAFFOLD = "scfv"
@@ -211,6 +221,14 @@ class CampaignConfig:
     hotspot_num_contacts: int
     hotspot_contact_probability_target: float
     hotspot_loss_mode: str
+    binder_target_contact_mode: str
+    mosaic_cdr_contact_weight: float
+    mosaic_cdr_contact_cutoff_angstrom: float
+    mosaic_cdr_num_target_contacts: int
+    mosaic_framework_contact_penalty_weight: float
+    mosaic_framework_contact_penalty_cutoff_angstrom: float
+    mosaic_framework_contact_probability_threshold: float
+    mosaic_framework_contact_penalty_scope: str
     target_geometry_drift: TargetGeometryDriftConfig
     analysis: AnalysisConfig
     output: Path
@@ -304,6 +322,26 @@ class CampaignConfig:
                     self.hotspot_contact_probability_target
                 ),
                 "hotspot_loss_mode": self.hotspot_loss_mode,
+                "binder_target_contact_mode": self.binder_target_contact_mode,
+                "mosaic_cdr_contact_weight": self.mosaic_cdr_contact_weight,
+                "mosaic_cdr_contact_cutoff_angstrom": (
+                    self.mosaic_cdr_contact_cutoff_angstrom
+                ),
+                "mosaic_cdr_num_target_contacts": (
+                    self.mosaic_cdr_num_target_contacts
+                ),
+                "mosaic_framework_contact_penalty_weight": (
+                    self.mosaic_framework_contact_penalty_weight
+                ),
+                "mosaic_framework_contact_penalty_cutoff_angstrom": (
+                    self.mosaic_framework_contact_penalty_cutoff_angstrom
+                ),
+                "mosaic_framework_contact_probability_threshold": (
+                    self.mosaic_framework_contact_probability_threshold
+                ),
+                "mosaic_framework_contact_penalty_scope": (
+                    self.mosaic_framework_contact_penalty_scope
+                ),
                 "target_geometry_drift": (
                     self.target_geometry_drift.to_resolved_dict()
                 ),
@@ -513,6 +551,85 @@ def load_campaign_config(
         "loss.hotspot_loss_mode",
         HOTSPOT_LOSS_MODES,
     )
+    binder_target_contact_mode = _parse_choice(
+        loss.get(
+            "binder_target_contact_mode",
+            DEFAULT_BINDER_TARGET_CONTACT_MODE,
+        ),
+        "loss.binder_target_contact_mode",
+        BINDER_TARGET_CONTACT_MODES,
+    )
+    if (
+        binder_target_contact_mode == "mosaic_cdr"
+        and binder_config.scaffold not in {SCFV_SCAFFOLD, VHH_SCAFFOLD}
+    ):
+        raise ValueError(
+            "loss.binder_target_contact_mode=mosaic_cdr requires binder.scaffold "
+            "scfv or vhh"
+        )
+    mosaic_cdr_contact_weight = _optional_float(
+        loss,
+        "loss.mosaic_cdr_contact_weight",
+        "mosaic_cdr_contact_weight",
+        default=DEFAULT_MOSAIC_CDR_CONTACT_WEIGHT,
+    )
+    if mosaic_cdr_contact_weight < 0:
+        raise ValueError("loss.mosaic_cdr_contact_weight must be non-negative")
+    mosaic_cdr_contact_cutoff_angstrom = _optional_float(
+        loss,
+        "loss.mosaic_cdr_contact_cutoff_angstrom",
+        "mosaic_cdr_contact_cutoff_angstrom",
+        default=DEFAULT_MOSAIC_CDR_CONTACT_CUTOFF_ANGSTROM,
+    )
+    if mosaic_cdr_contact_cutoff_angstrom <= 0:
+        raise ValueError("loss.mosaic_cdr_contact_cutoff_angstrom must be positive")
+    mosaic_cdr_num_target_contacts = _optional_int(
+        loss,
+        "loss.mosaic_cdr_num_target_contacts",
+        "mosaic_cdr_num_target_contacts",
+        default=DEFAULT_MOSAIC_CDR_NUM_TARGET_CONTACTS,
+    )
+    if mosaic_cdr_num_target_contacts <= 0:
+        raise ValueError("loss.mosaic_cdr_num_target_contacts must be positive")
+    mosaic_framework_contact_penalty_weight = _optional_float(
+        loss,
+        "loss.mosaic_framework_contact_penalty_weight",
+        "mosaic_framework_contact_penalty_weight",
+        default=DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_WEIGHT,
+    )
+    if mosaic_framework_contact_penalty_weight < 0:
+        raise ValueError(
+            "loss.mosaic_framework_contact_penalty_weight must be non-negative"
+        )
+    mosaic_framework_contact_penalty_cutoff_angstrom = _optional_float(
+        loss,
+        "loss.mosaic_framework_contact_penalty_cutoff_angstrom",
+        "mosaic_framework_contact_penalty_cutoff_angstrom",
+        default=DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_CUTOFF_ANGSTROM,
+    )
+    if mosaic_framework_contact_penalty_cutoff_angstrom <= 0:
+        raise ValueError(
+            "loss.mosaic_framework_contact_penalty_cutoff_angstrom must be positive"
+        )
+    mosaic_framework_contact_probability_threshold = _optional_float(
+        loss,
+        "loss.mosaic_framework_contact_probability_threshold",
+        "mosaic_framework_contact_probability_threshold",
+        default=DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PROBABILITY_THRESHOLD,
+    )
+    if not 0 < mosaic_framework_contact_probability_threshold <= 1:
+        raise ValueError(
+            "loss.mosaic_framework_contact_probability_threshold must be greater "
+            "than 0 and at most 1"
+        )
+    mosaic_framework_contact_penalty_scope = _parse_choice(
+        loss.get(
+            "mosaic_framework_contact_penalty_scope",
+            DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPE,
+        ),
+        "loss.mosaic_framework_contact_penalty_scope",
+        MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPES,
+    )
     target_geometry_drift = _parse_target_geometry_drift(
         loss,
         has_target_structure=target_structure is not None,
@@ -538,6 +655,20 @@ def load_campaign_config(
         hotspot_num_contacts=hotspot_num_contacts,
         hotspot_contact_probability_target=hotspot_contact_probability_target,
         hotspot_loss_mode=hotspot_loss_mode,
+        binder_target_contact_mode=binder_target_contact_mode,
+        mosaic_cdr_contact_weight=mosaic_cdr_contact_weight,
+        mosaic_cdr_contact_cutoff_angstrom=mosaic_cdr_contact_cutoff_angstrom,
+        mosaic_cdr_num_target_contacts=mosaic_cdr_num_target_contacts,
+        mosaic_framework_contact_penalty_weight=(
+            mosaic_framework_contact_penalty_weight
+        ),
+        mosaic_framework_contact_penalty_cutoff_angstrom=(
+            mosaic_framework_contact_penalty_cutoff_angstrom
+        ),
+        mosaic_framework_contact_probability_threshold=(
+            mosaic_framework_contact_probability_threshold
+        ),
+        mosaic_framework_contact_penalty_scope=mosaic_framework_contact_penalty_scope,
         target_geometry_drift=target_geometry_drift,
         analysis=analysis,
         output=Path(output_value).expanduser(),

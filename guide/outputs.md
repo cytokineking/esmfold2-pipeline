@@ -78,6 +78,12 @@ campaign/
   records drift settings. Candidate rows include region-aware
   `target_geometry_drift_distance_rmse` and
   `target_geometry_drift_aligned_rmsd`.
+- When `loss.binder_target_contact_mode: mosaic_cdr` is used, final CSVs include
+  Mosaic CDR contact settings and diagnostics: `binder_target_contact_mode`,
+  `mosaic_cdr_contact_scope`, CDR contact probability summaries, the CDR contact
+  loss, and optional framework contact penalty settings, scope, probability
+  summaries, and loss. A framework penalty is reported as enabled only when
+  `mosaic_framework_contact_penalty_weight` is greater than zero.
 - `logs/design_workers/` is created by `run-multi`; `logs/validation_workers/`
   is created by `validate-run-multi`.
 - `esmfold2/campaign_summary.json` is refreshed by `aggregate`, `select`, and

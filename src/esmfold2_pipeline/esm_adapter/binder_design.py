@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 import logging
 import os
@@ -13,12 +13,22 @@ import numpy as np
 from esmfold2_pipeline.artifact_layout import structure_relpath
 from esmfold2_pipeline.artifacts import write_text_atomic
 from esmfold2_pipeline.config import (
+    BINDER_TARGET_CONTACT_MODES,
+    DEFAULT_BINDER_TARGET_CONTACT_MODE,
     DEFAULT_ESMFOLD2_INVERSION_MODEL,
     DEFAULT_HOTSPOT_CONTACT_WEIGHT,
     DEFAULT_HOTSPOT_LOSS_MODE,
     DEFAULT_HOTSPOT_CRITIC_CONTACT_CUTOFF_ANGSTROM,
     DEFAULT_HOTSPOT_DISTOGRAM_CONTACT_CUTOFF_ANGSTROM,
+    DEFAULT_MOSAIC_CDR_CONTACT_CUTOFF_ANGSTROM,
+    DEFAULT_MOSAIC_CDR_CONTACT_WEIGHT,
+    DEFAULT_MOSAIC_CDR_NUM_TARGET_CONTACTS,
+    DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_CUTOFF_ANGSTROM,
+    DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPE,
+    DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_WEIGHT,
+    DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PROBABILITY_THRESHOLD,
     HOTSPOT_LOSS_MODES,
+    MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPES,
     TargetGeometryDriftConfig,
 )
 from esmfold2_pipeline.design import (
@@ -194,6 +204,14 @@ def _build_design_spec(
     hotspot_num_contacts: int,
     hotspot_contact_probability_target: float,
     hotspot_loss_mode: str,
+    binder_target_contact_mode: str,
+    mosaic_cdr_contact_weight: float,
+    mosaic_cdr_contact_cutoff_angstrom: float,
+    mosaic_cdr_num_target_contacts: int,
+    mosaic_framework_contact_penalty_weight: float,
+    mosaic_framework_contact_penalty_cutoff_angstrom: float,
+    mosaic_framework_contact_probability_threshold: float,
+    mosaic_framework_contact_penalty_scope: str,
     target_geometry_drift: TargetGeometryDriftConfig | None,
     artifact_stem: str | None,
     disable_hf_xet: bool,
@@ -234,6 +252,22 @@ def _build_design_spec(
         hotspot_num_contacts=hotspot_num_contacts,
         hotspot_contact_probability_target=hotspot_contact_probability_target,
         hotspot_loss_mode=hotspot_loss_mode,
+        binder_target_contact_mode=binder_target_contact_mode,
+        mosaic_cdr_contact_weight=mosaic_cdr_contact_weight,
+        mosaic_cdr_contact_cutoff_angstrom=mosaic_cdr_contact_cutoff_angstrom,
+        mosaic_cdr_num_target_contacts=mosaic_cdr_num_target_contacts,
+        mosaic_framework_contact_penalty_weight=(
+            mosaic_framework_contact_penalty_weight
+        ),
+        mosaic_framework_contact_penalty_cutoff_angstrom=(
+            mosaic_framework_contact_penalty_cutoff_angstrom
+        ),
+        mosaic_framework_contact_probability_threshold=(
+            mosaic_framework_contact_probability_threshold
+        ),
+        mosaic_framework_contact_penalty_scope=(
+            mosaic_framework_contact_penalty_scope
+        ),
         target_geometry_drift=target_geometry_drift,
         artifact_stem=artifact_stem,
         disable_hf_xet=disable_hf_xet,
@@ -260,6 +294,9 @@ def _validate_design_spec(spec: DesignSpec) -> DesignSpec:
     )
     hotspot_loss_mode = spec.hotspot_loss_mode or DEFAULT_HOTSPOT_LOSS_MODE
     target_geometry_drift = spec.target_geometry_drift or TargetGeometryDriftConfig()
+    binder_target_contact_mode = (
+        spec.binder_target_contact_mode or DEFAULT_BINDER_TARGET_CONTACT_MODE
+    )
 
     if hotspot_distogram_contact_cutoff_angstrom <= 0:
         raise ValueError("hotspot_distogram_contact_cutoff_angstrom must be positive")
@@ -274,6 +311,43 @@ def _validate_design_spec(spec: DesignSpec) -> DesignSpec:
     if hotspot_loss_mode not in HOTSPOT_LOSS_MODES:
         choices = ", ".join(sorted(HOTSPOT_LOSS_MODES))
         raise ValueError(f"hotspot_loss_mode must be one of: {choices}")
+    if binder_target_contact_mode not in BINDER_TARGET_CONTACT_MODES:
+        choices = ", ".join(sorted(BINDER_TARGET_CONTACT_MODES))
+        raise ValueError(f"binder_target_contact_mode must be one of: {choices}")
+    if (
+        binder_target_contact_mode == "mosaic_cdr"
+        and binder_code(spec.binder_scaffold or spec.binder_name)
+        not in {"scfv", "vhh"}
+    ):
+        raise ValueError("mosaic_cdr contact mode requires an scFv or VHH binder")
+    if spec.mosaic_cdr_contact_weight < 0:
+        raise ValueError("mosaic_cdr_contact_weight must be non-negative")
+    if spec.mosaic_cdr_contact_cutoff_angstrom <= 0:
+        raise ValueError("mosaic_cdr_contact_cutoff_angstrom must be positive")
+    if spec.mosaic_cdr_num_target_contacts <= 0:
+        raise ValueError("mosaic_cdr_num_target_contacts must be positive")
+    if spec.mosaic_framework_contact_penalty_weight < 0:
+        raise ValueError(
+            "mosaic_framework_contact_penalty_weight must be non-negative"
+        )
+    if spec.mosaic_framework_contact_penalty_cutoff_angstrom <= 0:
+        raise ValueError(
+            "mosaic_framework_contact_penalty_cutoff_angstrom must be positive"
+        )
+    if not 0 < spec.mosaic_framework_contact_probability_threshold <= 1:
+        raise ValueError(
+            "mosaic_framework_contact_probability_threshold must be greater than "
+            "0 and at most 1"
+        )
+    if (
+        spec.mosaic_framework_contact_penalty_scope
+        not in MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPES
+    ):
+        choices = ", ".join(sorted(MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPES))
+        raise ValueError(
+            "mosaic_framework_contact_penalty_scope must be one of: "
+            f"{choices}"
+        )
     if target_geometry_drift.weight < 0:
         raise ValueError("target_geometry_drift.weight must be non-negative")
     if target_geometry_drift.tolerance_angstrom <= 0:
@@ -302,6 +376,7 @@ def _validate_design_spec(spec: DesignSpec) -> DesignSpec:
         ),
         hotspot_critic_contact_cutoff_angstrom=hotspot_critic_contact_cutoff_angstrom,
         hotspot_loss_mode=hotspot_loss_mode,
+        binder_target_contact_mode=binder_target_contact_mode,
         target_geometry_drift=target_geometry_drift,
     )
 
@@ -327,6 +402,7 @@ def _run_local_binder_design_artifact(spec: DesignSpec) -> DesignCandidateArtifa
         local_miniprotein=True,
         binder_prompt_factories=None,
     )
+    _validate_mosaic_cdr_prompt(spec, prompt_plan)
     target_geometry_drift = spec.target_geometry_drift or TargetGeometryDriftConfig()
     target_geometry_drift_indices = _target_geometry_drift_indices_for_spec(
         spec,
@@ -352,6 +428,16 @@ def _run_local_binder_design_artifact(spec: DesignSpec) -> DesignCandidateArtifa
         target_geometry_drift_indices=target_geometry_drift_indices,
         design_run=design_run,
     )
+
+
+def _validate_mosaic_cdr_prompt(
+    spec: DesignSpec,
+    prompt_plan: BinderPromptPlan,
+) -> None:
+    if spec.binder_target_contact_mode != "mosaic_cdr":
+        return
+    if not prompt_plan.cdr_indices:
+        raise ValueError("mosaic_cdr contact mode requires resolved CDR indices")
 
 
 def _run_local_design(
@@ -421,6 +507,24 @@ def _run_local_design(
             ),
             hotspot_loss_mode=spec.hotspot_loss_mode or DEFAULT_HOTSPOT_LOSS_MODE,
             binder_contact_indices=prompt_plan.cdr_indices or None,
+            binder_target_contact_mode=spec.binder_target_contact_mode,
+            mosaic_cdr_contact_weight=spec.mosaic_cdr_contact_weight,
+            mosaic_cdr_contact_cutoff_angstrom=(
+                spec.mosaic_cdr_contact_cutoff_angstrom
+            ),
+            mosaic_cdr_num_target_contacts=spec.mosaic_cdr_num_target_contacts,
+            mosaic_framework_contact_penalty_weight=(
+                spec.mosaic_framework_contact_penalty_weight
+            ),
+            mosaic_framework_contact_penalty_cutoff_angstrom=(
+                spec.mosaic_framework_contact_penalty_cutoff_angstrom
+            ),
+            mosaic_framework_contact_probability_threshold=(
+                spec.mosaic_framework_contact_probability_threshold
+            ),
+            mosaic_framework_contact_penalty_scope=(
+                spec.mosaic_framework_contact_penalty_scope
+            ),
         ),
         compute_plm_loss=lambda **kwargs: design_plm.compute_esmc_pseudoperplexity_nll(
             **kwargs,
@@ -465,6 +569,24 @@ def _local_structure_loss_callback(
     hotspot_contact_probability_target: float,
     hotspot_loss_mode: str,
     binder_contact_indices: tuple[int, ...] | None,
+    binder_target_contact_mode: str = DEFAULT_BINDER_TARGET_CONTACT_MODE,
+    mosaic_cdr_contact_weight: float = DEFAULT_MOSAIC_CDR_CONTACT_WEIGHT,
+    mosaic_cdr_contact_cutoff_angstrom: float = (
+        DEFAULT_MOSAIC_CDR_CONTACT_CUTOFF_ANGSTROM
+    ),
+    mosaic_cdr_num_target_contacts: int = DEFAULT_MOSAIC_CDR_NUM_TARGET_CONTACTS,
+    mosaic_framework_contact_penalty_weight: float = (
+        DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_WEIGHT
+    ),
+    mosaic_framework_contact_penalty_cutoff_angstrom: float = (
+        DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_CUTOFF_ANGSTROM
+    ),
+    mosaic_framework_contact_probability_threshold: float = (
+        DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PROBABILITY_THRESHOLD
+    ),
+    mosaic_framework_contact_penalty_scope: str = (
+        DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPE
+    ),
 ):
     drift_reference_distances: np.ndarray | None = None
     drift_pair_mask: np.ndarray | None = None
@@ -489,7 +611,8 @@ def _local_structure_loss_callback(
 
     def compute_structure_losses(distogram_logits, binder_length: int) -> dict[str, Any]:
         bin_distance = design_losses.get_mid_points(binder_design.torch)
-        return design_losses.compute_design_structure_losses(
+        use_mosaic_cdr = binder_target_contact_mode == "mosaic_cdr"
+        losses = design_losses.compute_design_structure_losses(
             distogram_logits,
             binder_length,
             torch_module=binder_design.torch,
@@ -506,7 +629,7 @@ def _local_structure_loss_callback(
                 target_geometry_drift.stiffness_angstrom
             ),
             hotspot_indices=hotspot_indices,
-            hotspot_contact_weight=hotspot_contact_weight,
+            hotspot_contact_weight=0.0 if use_mosaic_cdr else hotspot_contact_weight,
             hotspot_contact_cutoff_angstrom=(
                 hotspot_distogram_contact_cutoff_angstrom
             ),
@@ -516,7 +639,52 @@ def _local_structure_loss_callback(
             ),
             hotspot_loss_mode=hotspot_loss_mode,
             binder_contact_indices=binder_contact_indices,
+            include_inter_contact=not use_mosaic_cdr,
         )
+        if not use_mosaic_cdr:
+            return losses
+        if not binder_contact_indices:
+            raise ValueError("mosaic_cdr contact mode requires CDR contact indices")
+        mosaic_loss = design_losses.compute_mosaic_cdr_contact_loss(
+            binder_design.torch,
+            distogram_logits,
+            binder_length,
+            cdr_indices=binder_contact_indices,
+            contact_cutoff_angstrom=mosaic_cdr_contact_cutoff_angstrom,
+            num_target_contacts=mosaic_cdr_num_target_contacts,
+            hotspot_indices=hotspot_indices,
+            bin_distances=bin_distance,
+        )
+        losses["mosaic_cdr_contact_loss"] = mosaic_loss
+        losses["total_loss"] = (
+            losses["total_loss"] + mosaic_cdr_contact_weight * mosaic_loss
+        )
+        if mosaic_framework_contact_penalty_weight > 0:
+            framework_penalty_hotspot_indices = _framework_penalty_hotspot_indices(
+                hotspot_indices=hotspot_indices,
+                scope=mosaic_framework_contact_penalty_scope,
+            )
+            framework_penalty = design_losses.compute_framework_contact_penalty_loss(
+                binder_design.torch,
+                distogram_logits,
+                binder_length,
+                cdr_indices=binder_contact_indices,
+                contact_cutoff_angstrom=(
+                    mosaic_framework_contact_penalty_cutoff_angstrom
+                ),
+                num_target_contacts=mosaic_cdr_num_target_contacts,
+                contact_probability_threshold=(
+                    mosaic_framework_contact_probability_threshold
+                ),
+                hotspot_indices=framework_penalty_hotspot_indices,
+                bin_distances=bin_distance,
+            )
+            losses["mosaic_framework_contact_penalty_loss"] = framework_penalty
+            losses["total_loss"] = (
+                losses["total_loss"]
+                + mosaic_framework_contact_penalty_weight * framework_penalty
+            )
+        return losses
 
     return compute_structure_losses
 
@@ -637,6 +805,24 @@ def run_binder_design_artifact(
     hotspot_num_contacts: int = 1,
     hotspot_contact_probability_target: float = 0.6,
     hotspot_loss_mode: str = DEFAULT_HOTSPOT_LOSS_MODE,
+    binder_target_contact_mode: str = DEFAULT_BINDER_TARGET_CONTACT_MODE,
+    mosaic_cdr_contact_weight: float = DEFAULT_MOSAIC_CDR_CONTACT_WEIGHT,
+    mosaic_cdr_contact_cutoff_angstrom: float = (
+        DEFAULT_MOSAIC_CDR_CONTACT_CUTOFF_ANGSTROM
+    ),
+    mosaic_cdr_num_target_contacts: int = DEFAULT_MOSAIC_CDR_NUM_TARGET_CONTACTS,
+    mosaic_framework_contact_penalty_weight: float = (
+        DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_WEIGHT
+    ),
+    mosaic_framework_contact_penalty_cutoff_angstrom: float = (
+        DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_CUTOFF_ANGSTROM
+    ),
+    mosaic_framework_contact_probability_threshold: float = (
+        DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PROBABILITY_THRESHOLD
+    ),
+    mosaic_framework_contact_penalty_scope: str = (
+        DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPE
+    ),
     target_geometry_drift: TargetGeometryDriftConfig | None = None,
     artifact_stem: str | None = None,
     disable_hf_xet: bool = True,
@@ -681,6 +867,22 @@ def run_binder_design_artifact(
         hotspot_num_contacts=hotspot_num_contacts,
         hotspot_contact_probability_target=hotspot_contact_probability_target,
         hotspot_loss_mode=hotspot_loss_mode,
+        binder_target_contact_mode=binder_target_contact_mode,
+        mosaic_cdr_contact_weight=mosaic_cdr_contact_weight,
+        mosaic_cdr_contact_cutoff_angstrom=mosaic_cdr_contact_cutoff_angstrom,
+        mosaic_cdr_num_target_contacts=mosaic_cdr_num_target_contacts,
+        mosaic_framework_contact_penalty_weight=(
+            mosaic_framework_contact_penalty_weight
+        ),
+        mosaic_framework_contact_penalty_cutoff_angstrom=(
+            mosaic_framework_contact_penalty_cutoff_angstrom
+        ),
+        mosaic_framework_contact_probability_threshold=(
+            mosaic_framework_contact_probability_threshold
+        ),
+        mosaic_framework_contact_penalty_scope=(
+            mosaic_framework_contact_penalty_scope
+        ),
         target_geometry_drift=target_geometry_drift,
         artifact_stem=artifact_stem,
         disable_hf_xet=disable_hf_xet,
@@ -723,6 +925,22 @@ def run_binder_design_artifact(
     hotspot_num_contacts = spec.hotspot_num_contacts
     hotspot_contact_probability_target = spec.hotspot_contact_probability_target
     hotspot_loss_mode = spec.hotspot_loss_mode
+    binder_target_contact_mode = spec.binder_target_contact_mode
+    mosaic_cdr_contact_weight = spec.mosaic_cdr_contact_weight
+    mosaic_cdr_contact_cutoff_angstrom = spec.mosaic_cdr_contact_cutoff_angstrom
+    mosaic_cdr_num_target_contacts = spec.mosaic_cdr_num_target_contacts
+    mosaic_framework_contact_penalty_weight = (
+        spec.mosaic_framework_contact_penalty_weight
+    )
+    mosaic_framework_contact_penalty_cutoff_angstrom = (
+        spec.mosaic_framework_contact_penalty_cutoff_angstrom
+    )
+    mosaic_framework_contact_probability_threshold = (
+        spec.mosaic_framework_contact_probability_threshold
+    )
+    mosaic_framework_contact_penalty_scope = (
+        spec.mosaic_framework_contact_penalty_scope
+    )
     target_geometry_drift = spec.target_geometry_drift or TargetGeometryDriftConfig()
     artifact_stem = spec.artifact_stem
     disable_hf_xet = spec.disable_hf_xet
@@ -803,6 +1021,7 @@ def run_binder_design_artifact(
         seed=seed,
         is_antibody=is_antibody,
     )
+    _validate_mosaic_cdr_prompt(spec, prompt_plan)
     _progress(
         "prepared binder prompt "
         f"binder_sequence={'provided' if prompt_plan.binder_sequence else 'factory'} "
@@ -829,6 +1048,42 @@ def run_binder_design_artifact(
         spec,
         target_geometry_drift=target_geometry_drift,
     )
+    if binder_target_contact_mode == "mosaic_cdr":
+        target_contact_loss_context = _patched_structure_losses_for_mosaic_cdr(
+            binder_design,
+            structure_target=structure_target,
+            cdr_indices=prompt_plan.cdr_indices,
+            mosaic_cdr_contact_weight=mosaic_cdr_contact_weight,
+            mosaic_cdr_contact_cutoff_angstrom=mosaic_cdr_contact_cutoff_angstrom,
+            mosaic_cdr_num_target_contacts=mosaic_cdr_num_target_contacts,
+            mosaic_framework_contact_penalty_weight=(
+                mosaic_framework_contact_penalty_weight
+            ),
+            mosaic_framework_contact_penalty_cutoff_angstrom=(
+                mosaic_framework_contact_penalty_cutoff_angstrom
+            ),
+            mosaic_framework_contact_probability_threshold=(
+                mosaic_framework_contact_probability_threshold
+            ),
+            mosaic_framework_contact_penalty_scope=(
+                mosaic_framework_contact_penalty_scope
+            ),
+        )
+    elif binder_target_contact_mode == "legacy":
+        target_contact_loss_context = _patched_structure_losses_for_hotspots(
+            binder_design,
+            structure_target=structure_target,
+            hotspot_contact_weight=hotspot_contact_weight,
+            hotspot_distogram_contact_cutoff_angstrom=(
+                hotspot_distogram_contact_cutoff_angstrom
+            ),
+            hotspot_num_contacts=hotspot_num_contacts,
+            hotspot_contact_probability_target=hotspot_contact_probability_target,
+            hotspot_loss_mode=hotspot_loss_mode,
+            binder_contact_indices=prompt_plan.cdr_indices or None,
+        )
+    else:
+        target_contact_loss_context = nullcontext()
 
     with _patched_binder_length_range(
         binder_design,
@@ -841,18 +1096,7 @@ def run_binder_design_artifact(
             drift_config=target_geometry_drift,
             selected_indices=target_geometry_drift_indices,
         ):
-            with _patched_structure_losses_for_hotspots(
-                binder_design,
-                structure_target=structure_target,
-                hotspot_contact_weight=hotspot_contact_weight,
-                hotspot_distogram_contact_cutoff_angstrom=(
-                    hotspot_distogram_contact_cutoff_angstrom
-                ),
-                hotspot_num_contacts=hotspot_num_contacts,
-                hotspot_contact_probability_target=hotspot_contact_probability_target,
-                hotspot_loss_mode=hotspot_loss_mode,
-                binder_contact_indices=prompt_plan.cdr_indices or None,
-            ):
+            with target_contact_loss_context:
                 with _patched_fold_with_distogram_conditioning(
                     binder_design,
                     structure_target=structure_target,
@@ -930,7 +1174,11 @@ def _artifact_from_design_run(
             else DEFAULT_HOTSPOT_CRITIC_CONTACT_CUTOFF_ANGSTROM
         )
     hotspot_loss_mode = spec.hotspot_loss_mode or DEFAULT_HOTSPOT_LOSS_MODE
+    binder_target_contact_mode = (
+        spec.binder_target_contact_mode or DEFAULT_BINDER_TARGET_CONTACT_MODE
+    )
     inversion_model_name = spec.inversion_model_name or DEFAULT_ESMFOLD2_INVERSION_MODEL
+    target_global_hotspots: tuple[int, ...] = ()
 
     critic_result = _select_critic_result(
         design_run.critic_results,
@@ -1005,6 +1253,35 @@ def _artifact_from_design_run(
         "final_loss": _to_scalar(critic_result.get("final_loss")),
         "complex_sequence": complex_sequence,
     }
+    if binder_target_contact_mode == "mosaic_cdr":
+        design_metrics.update(
+            {
+                "binder_target_contact_mode": binder_target_contact_mode,
+                "mosaic_cdr_contact_loss_enabled": True,
+                "mosaic_cdr_contact_weight": spec.mosaic_cdr_contact_weight,
+                "mosaic_cdr_contact_cutoff_angstrom": (
+                    spec.mosaic_cdr_contact_cutoff_angstrom
+                ),
+                "mosaic_cdr_num_target_contacts": (
+                    spec.mosaic_cdr_num_target_contacts
+                ),
+                "mosaic_framework_contact_penalty_enabled": (
+                    spec.mosaic_framework_contact_penalty_weight > 0
+                ),
+                "mosaic_framework_contact_penalty_weight": (
+                    spec.mosaic_framework_contact_penalty_weight
+                ),
+                "mosaic_framework_contact_penalty_cutoff_angstrom": (
+                    spec.mosaic_framework_contact_penalty_cutoff_angstrom
+                ),
+                "mosaic_framework_contact_probability_threshold": (
+                    spec.mosaic_framework_contact_probability_threshold
+                ),
+                "mosaic_framework_contact_penalty_scope": (
+                    spec.mosaic_framework_contact_penalty_scope
+                ),
+            }
+        )
     if designed_target_sequence is not None:
         design_metrics["designed_target_sequence"] = designed_target_sequence
     if spec.structure_target is not None:
@@ -1107,6 +1384,34 @@ def _artifact_from_design_run(
                     binder_contact_indices=prompt_plan.cdr_indices or None,
                 )
             )
+    if (
+        binder_target_contact_mode == "mosaic_cdr"
+        and design_run.last_design_fold is not None
+        and binder_design is not None
+        and prompt_plan.cdr_indices
+    ):
+        design_metrics.update(
+            _mosaic_cdr_design_contact_probability_metrics(
+                binder_design,
+                design_run.last_design_fold,
+                cdr_indices=prompt_plan.cdr_indices,
+                hotspot_indices=target_global_hotspots,
+                contact_cutoff_angstrom=spec.mosaic_cdr_contact_cutoff_angstrom,
+                num_target_contacts=spec.mosaic_cdr_num_target_contacts,
+                framework_contact_penalty_weight=(
+                    spec.mosaic_framework_contact_penalty_weight
+                ),
+                framework_contact_penalty_cutoff_angstrom=(
+                    spec.mosaic_framework_contact_penalty_cutoff_angstrom
+                ),
+                framework_contact_probability_threshold=(
+                    spec.mosaic_framework_contact_probability_threshold
+                ),
+                framework_contact_penalty_scope=(
+                    spec.mosaic_framework_contact_penalty_scope
+                ),
+            )
+        )
 
     critic_metrics = _extract_metrics(critic_result, steps=spec.steps)
     if design_run.last_confidence_fold is not None:
@@ -1557,6 +1862,34 @@ def _target_global_hotspot_indices(structure_target: PreparedTarget) -> tuple[in
         offset = offset_by_chain[chain.canonical_chain_id]
         global_indices.extend(offset + index for index in chain.hotspot_indices)
     return tuple(sorted(global_indices))
+
+
+def _framework_penalty_hotspot_indices(
+    *,
+    hotspot_indices: tuple[int, ...],
+    scope: str,
+) -> tuple[int, ...]:
+    if scope == "auto":
+        return hotspot_indices
+    if scope == "hotspot":
+        if not hotspot_indices:
+            raise ValueError(
+                "mosaic_framework_contact_penalty_scope=hotspot requires "
+                "target.hotspots"
+            )
+        return hotspot_indices
+    if scope == "target_all":
+        return ()
+    choices = ", ".join(sorted(MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPES))
+    raise ValueError(
+        f"mosaic_framework_contact_penalty_scope must be one of: {choices}"
+    )
+
+
+def _framework_penalty_target_scope_label(
+    hotspot_indices: tuple[int, ...],
+) -> str:
+    return "target_hotspots" if hotspot_indices else "target_all"
 
 
 def _extract_metrics(result: dict[str, Any], *, steps: int) -> dict[str, float | int | str | None]:
@@ -2032,6 +2365,89 @@ def _patched_structure_losses_for_hotspots(
         binder_design.compute_structure_losses = original
 
 
+@contextmanager
+def _patched_structure_losses_for_mosaic_cdr(
+    binder_design,
+    *,
+    structure_target: PreparedTarget | None,
+    cdr_indices: tuple[int, ...],
+    mosaic_cdr_contact_weight: float,
+    mosaic_cdr_contact_cutoff_angstrom: float,
+    mosaic_cdr_num_target_contacts: int,
+    mosaic_framework_contact_penalty_weight: float,
+    mosaic_framework_contact_penalty_cutoff_angstrom: float,
+    mosaic_framework_contact_probability_threshold: float,
+    mosaic_framework_contact_penalty_scope: str,
+) -> Iterator[None]:
+    if not cdr_indices:
+        raise ValueError("mosaic_cdr contact mode requires CDR contact indices")
+    hotspot_indices = (
+        _target_global_hotspot_indices(structure_target)
+        if structure_target is not None
+        else ()
+    )
+
+    original = binder_design.compute_structure_losses
+
+    def compute_structure_losses(distogram_logits, binder_length: int) -> dict:
+        losses = original(distogram_logits, binder_length)
+        if "inter_contact_loss" not in losses:
+            raise RuntimeError(
+                "mosaic_cdr contact mode requires the tutorial backend loss dict "
+                "to include inter_contact_loss so legacy binder-target attraction "
+                "can be removed"
+            )
+        losses["total_loss"] = (
+            losses["total_loss"]
+            - design_losses.LOSS_WEIGHTS["inter_contact"]
+            * losses["inter_contact_loss"]
+        )
+        mosaic_loss = _compute_mosaic_cdr_contact_loss(
+            binder_design,
+            distogram_logits,
+            binder_length,
+            cdr_indices=cdr_indices,
+            contact_cutoff_angstrom=mosaic_cdr_contact_cutoff_angstrom,
+            num_target_contacts=mosaic_cdr_num_target_contacts,
+            hotspot_indices=hotspot_indices,
+        )
+        losses["mosaic_cdr_contact_loss"] = mosaic_loss
+        losses["total_loss"] = (
+            losses["total_loss"] + mosaic_cdr_contact_weight * mosaic_loss
+        )
+        if mosaic_framework_contact_penalty_weight > 0:
+            framework_penalty_hotspot_indices = _framework_penalty_hotspot_indices(
+                hotspot_indices=hotspot_indices,
+                scope=mosaic_framework_contact_penalty_scope,
+            )
+            framework_penalty = _compute_framework_contact_penalty_loss(
+                binder_design,
+                distogram_logits,
+                binder_length,
+                cdr_indices=cdr_indices,
+                contact_cutoff_angstrom=(
+                    mosaic_framework_contact_penalty_cutoff_angstrom
+                ),
+                num_target_contacts=mosaic_cdr_num_target_contacts,
+                contact_probability_threshold=(
+                    mosaic_framework_contact_probability_threshold
+                ),
+                hotspot_indices=framework_penalty_hotspot_indices,
+            )
+            losses["mosaic_framework_contact_penalty_loss"] = framework_penalty
+            losses["total_loss"] = (
+                losses["total_loss"]
+                + mosaic_framework_contact_penalty_weight * framework_penalty
+            )
+        return losses
+
+    binder_design.compute_structure_losses = compute_structure_losses
+    try:
+        yield
+    finally:
+        binder_design.compute_structure_losses = original
+
+
 def _compute_hotspot_contact_loss(
     binder_design,
     distogram_logits,
@@ -2134,6 +2550,96 @@ def _hotspot_contact_probability_scores(
         contact_cutoff_angstrom=contact_cutoff_angstrom,
         hotspot_num_contacts=hotspot_num_contacts,
         binder_contact_indices=binder_contact_indices,
+        bin_distances=_distogram_bin_midpoints(binder_design),
+    )
+
+
+def _compute_mosaic_cdr_contact_loss(
+    binder_design,
+    distogram_logits,
+    binder_length: int,
+    *,
+    cdr_indices: tuple[int, ...],
+    contact_cutoff_angstrom: float,
+    num_target_contacts: int,
+    hotspot_indices: tuple[int, ...] = (),
+):
+    return design_losses.compute_mosaic_cdr_contact_loss(
+        binder_design.torch,
+        distogram_logits,
+        binder_length,
+        cdr_indices=cdr_indices,
+        contact_cutoff_angstrom=contact_cutoff_angstrom,
+        num_target_contacts=num_target_contacts,
+        hotspot_indices=hotspot_indices,
+        bin_distances=_distogram_bin_midpoints(binder_design),
+    )
+
+
+def _mosaic_cdr_contact_probability_scores(
+    binder_design,
+    distogram_logits,
+    binder_length: int,
+    *,
+    cdr_indices: tuple[int, ...],
+    contact_cutoff_angstrom: float,
+    num_target_contacts: int,
+    hotspot_indices: tuple[int, ...] = (),
+):
+    return design_losses.mosaic_cdr_contact_probability_scores(
+        binder_design.torch,
+        distogram_logits,
+        binder_length,
+        cdr_indices=cdr_indices,
+        contact_cutoff_angstrom=contact_cutoff_angstrom,
+        num_target_contacts=num_target_contacts,
+        hotspot_indices=hotspot_indices,
+        bin_distances=_distogram_bin_midpoints(binder_design),
+    )
+
+
+def _compute_framework_contact_penalty_loss(
+    binder_design,
+    distogram_logits,
+    binder_length: int,
+    *,
+    cdr_indices: tuple[int, ...],
+    contact_cutoff_angstrom: float,
+    num_target_contacts: int,
+    contact_probability_threshold: float,
+    hotspot_indices: tuple[int, ...] = (),
+):
+    return design_losses.compute_framework_contact_penalty_loss(
+        binder_design.torch,
+        distogram_logits,
+        binder_length,
+        cdr_indices=cdr_indices,
+        contact_cutoff_angstrom=contact_cutoff_angstrom,
+        num_target_contacts=num_target_contacts,
+        contact_probability_threshold=contact_probability_threshold,
+        hotspot_indices=hotspot_indices,
+        bin_distances=_distogram_bin_midpoints(binder_design),
+    )
+
+
+def _framework_contact_probability_scores(
+    binder_design,
+    distogram_logits,
+    binder_length: int,
+    *,
+    cdr_indices: tuple[int, ...],
+    contact_cutoff_angstrom: float,
+    num_target_contacts: int,
+    hotspot_indices: tuple[int, ...] = (),
+):
+    return design_losses.framework_contact_probability_scores(
+        binder_design.torch,
+        distogram_logits,
+        binder_length,
+        cdr_indices=cdr_indices,
+        contact_cutoff_angstrom=contact_cutoff_angstrom,
+        num_target_contacts=num_target_contacts,
+        hotspot_indices=hotspot_indices,
         bin_distances=_distogram_bin_midpoints(binder_design),
     )
 
@@ -3035,6 +3541,101 @@ def _hotspot_design_contact_probability_metrics(
             "binder_cdr" if binder_contact_indices is not None else "binder_all"
         ),
     }
+
+
+def _mosaic_cdr_design_contact_probability_metrics(
+    binder_design,
+    fold_result: dict[str, Any],
+    *,
+    cdr_indices: tuple[int, ...],
+    hotspot_indices: tuple[int, ...],
+    contact_cutoff_angstrom: float,
+    num_target_contacts: int,
+    framework_contact_penalty_weight: float,
+    framework_contact_penalty_cutoff_angstrom: float,
+    framework_contact_probability_threshold: float,
+    framework_contact_penalty_scope: str,
+) -> dict[str, float | int | str | bool]:
+    binder_sequence = _binder_sequence_from_fold(fold_result)
+    binder_length = len(binder_sequence)
+    scores = _mosaic_cdr_contact_probability_scores(
+        binder_design,
+        fold_result["distogram_logits"],
+        binder_length,
+        cdr_indices=cdr_indices,
+        contact_cutoff_angstrom=contact_cutoff_angstrom,
+        num_target_contacts=num_target_contacts,
+        hotspot_indices=hotspot_indices,
+    ).detach()
+    first_batch_scores = scores[0]
+    mosaic_loss = _compute_mosaic_cdr_contact_loss(
+        binder_design,
+        fold_result["distogram_logits"],
+        binder_length,
+        cdr_indices=cdr_indices,
+        contact_cutoff_angstrom=contact_cutoff_angstrom,
+        num_target_contacts=num_target_contacts,
+        hotspot_indices=hotspot_indices,
+    ).detach()
+    metrics: dict[str, float | int | str | bool] = {
+        "mosaic_cdr_contact_scope": (
+            "target_hotspots" if hotspot_indices else "target_all"
+        ),
+        "mosaic_cdr_contact_probability_max": float(
+            first_batch_scores.max().item()
+        ),
+        "mosaic_cdr_contact_probability_mean": float(
+            first_batch_scores.mean().item()
+        ),
+        "mosaic_cdr_contact_probability_min": float(
+            first_batch_scores.min().item()
+        ),
+        "mosaic_cdr_contact_loss": float(mosaic_loss[0].item()),
+        "mosaic_cdr_contact_cutoff_angstrom": float(contact_cutoff_angstrom),
+        "mosaic_cdr_num_target_contacts": int(num_target_contacts),
+    }
+    if framework_contact_penalty_weight <= 0:
+        return metrics
+
+    framework_penalty_hotspot_indices = _framework_penalty_hotspot_indices(
+        hotspot_indices=hotspot_indices,
+        scope=framework_contact_penalty_scope,
+    )
+    framework_scores = _framework_contact_probability_scores(
+        binder_design,
+        fold_result["distogram_logits"],
+        binder_length,
+        cdr_indices=cdr_indices,
+        contact_cutoff_angstrom=framework_contact_penalty_cutoff_angstrom,
+        num_target_contacts=num_target_contacts,
+        hotspot_indices=framework_penalty_hotspot_indices,
+    ).detach()
+    framework_penalty = _compute_framework_contact_penalty_loss(
+        binder_design,
+        fold_result["distogram_logits"],
+        binder_length,
+        cdr_indices=cdr_indices,
+        contact_cutoff_angstrom=framework_contact_penalty_cutoff_angstrom,
+        num_target_contacts=num_target_contacts,
+        contact_probability_threshold=framework_contact_probability_threshold,
+        hotspot_indices=framework_penalty_hotspot_indices,
+    ).detach()
+    metrics["mosaic_framework_contact_penalty_scope"] = framework_contact_penalty_scope
+    metrics["mosaic_framework_contact_penalty_target_scope"] = (
+        _framework_penalty_target_scope_label(framework_penalty_hotspot_indices)
+    )
+    metrics["mosaic_framework_contact_penalty_loss"] = float(
+        framework_penalty[0].item()
+    )
+    if int(framework_scores.shape[-1]) > 0:
+        first_batch_framework = framework_scores[0]
+        metrics["mosaic_framework_contact_probability_max"] = float(
+            first_batch_framework.max().item()
+        )
+        metrics["mosaic_framework_contact_probability_mean"] = float(
+            first_batch_framework.mean().item()
+        )
+    return metrics
 
 
 def _target_geometry_drift_metrics_from_capture(

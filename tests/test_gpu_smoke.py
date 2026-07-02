@@ -109,6 +109,14 @@ class GPUSmokeTest(unittest.TestCase):
             hotspot_num_contacts=1,
             hotspot_contact_probability_target=0.6,
             hotspot_loss_mode="entropy_hotspot",
+            binder_target_contact_mode="legacy",
+            mosaic_cdr_contact_weight=0.5,
+            mosaic_cdr_contact_cutoff_angstrom=22.0,
+            mosaic_cdr_num_target_contacts=3,
+            mosaic_framework_contact_penalty_weight=0.0,
+            mosaic_framework_contact_penalty_cutoff_angstrom=22.0,
+            mosaic_framework_contact_probability_threshold=0.2,
+            mosaic_framework_contact_penalty_scope="auto",
             target_geometry_drift=None,
             artifact_stem=None,
             disable_hf_xet=True,
@@ -336,7 +344,6 @@ class GPUSmokeTest(unittest.TestCase):
         self.assertTrue(runtime.esmc_model.cuda_called)
         self.assertTrue(runtime.esmc_model.eval_called)
         self.assertEqual(runtime.esmc_model.requires_grad_calls, [False])
-
 
     def test_local_design_runtime_cache_reuses_worker_models(self) -> None:
         loaded_runtime = object()
@@ -2716,6 +2723,104 @@ class GPUSmokeTest(unittest.TestCase):
                 binder_contact_indices=None,
             )
             self.assertIs(fake_module.compute_structure_losses, base_structure_losses)
+
+    def test_mosaic_cdr_patch_replaces_legacy_inter_contact_and_adds_penalty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / "target.pdb"
+            _write_test_pdb(target_path)
+            structure_target = parse_structure_target(
+                StructureTargetConfig(
+                    path=target_path,
+                    chains=("A",),
+                    hotspots={"A": ("2",)},
+                    conditioning_mode="distogram",
+                )
+            )
+
+            def base_structure_losses(_distogram_logits, _binder_length: int) -> dict:
+                return {"inter_contact_loss": 3.0, "total_loss": 10.0}
+
+            fake_module = types.SimpleNamespace(
+                compute_structure_losses=base_structure_losses,
+            )
+
+            with patch.object(
+                adapter_module,
+                "_compute_mosaic_cdr_contact_loss",
+                return_value=2.0,
+            ) as mosaic_loss, patch.object(
+                adapter_module,
+                "_compute_framework_contact_penalty_loss",
+                return_value=4.0,
+            ) as framework_penalty:
+                with adapter_module._patched_structure_losses_for_mosaic_cdr(
+                    fake_module,
+                    structure_target=structure_target,
+                    cdr_indices=(3, 4),
+                    mosaic_cdr_contact_weight=0.25,
+                    mosaic_cdr_contact_cutoff_angstrom=22.0,
+                    mosaic_cdr_num_target_contacts=2,
+                    mosaic_framework_contact_penalty_weight=0.5,
+                    mosaic_framework_contact_penalty_cutoff_angstrom=18.0,
+                    mosaic_framework_contact_probability_threshold=0.2,
+                    mosaic_framework_contact_penalty_scope="auto",
+                ):
+                    losses = fake_module.compute_structure_losses("logits", 8)
+
+        self.assertEqual(losses["inter_contact_loss"], 3.0)
+        self.assertEqual(losses["mosaic_cdr_contact_loss"], 2.0)
+        self.assertEqual(losses["mosaic_framework_contact_penalty_loss"], 4.0)
+        self.assertEqual(losses["total_loss"], 11.0)
+        mosaic_loss.assert_called_once_with(
+            fake_module,
+            "logits",
+            8,
+            cdr_indices=(3, 4),
+            contact_cutoff_angstrom=22.0,
+            num_target_contacts=2,
+            hotspot_indices=(1,),
+        )
+        framework_penalty.assert_called_once_with(
+            fake_module,
+            "logits",
+            8,
+            cdr_indices=(3, 4),
+            contact_cutoff_angstrom=18.0,
+            num_target_contacts=2,
+            contact_probability_threshold=0.2,
+            hotspot_indices=(1,),
+        )
+        self.assertIs(fake_module.compute_structure_losses, base_structure_losses)
+
+    def test_mosaic_cdr_patch_rejects_tutorial_loss_without_inter_contact(self) -> None:
+        def base_structure_losses(_distogram_logits, _binder_length: int) -> dict:
+            return {"total_loss": 10.0}
+
+        fake_module = types.SimpleNamespace(
+            compute_structure_losses=base_structure_losses,
+        )
+
+        with patch.object(
+            adapter_module,
+            "_compute_mosaic_cdr_contact_loss",
+            return_value=2.0,
+        ):
+            with adapter_module._patched_structure_losses_for_mosaic_cdr(
+                fake_module,
+                structure_target=None,
+                cdr_indices=(3, 4),
+                mosaic_cdr_contact_weight=0.25,
+                mosaic_cdr_contact_cutoff_angstrom=22.0,
+                mosaic_cdr_num_target_contacts=2,
+                mosaic_framework_contact_penalty_weight=0.0,
+                mosaic_framework_contact_penalty_cutoff_angstrom=18.0,
+                mosaic_framework_contact_probability_threshold=0.2,
+                mosaic_framework_contact_penalty_scope="hotspot",
+            ):
+                with self.assertRaisesRegex(RuntimeError, "inter_contact_loss"):
+                    fake_module.compute_structure_losses("logits", 8)
+
+        self.assertIs(fake_module.compute_structure_losses, base_structure_losses)
 
     def test_target_geometry_drift_patch_adds_hinge_loss_and_restores(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

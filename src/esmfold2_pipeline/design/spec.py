@@ -4,7 +4,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from esmfold2_pipeline.config import TargetGeometryDriftConfig
+from esmfold2_pipeline.config import (
+    DEFAULT_BINDER_TARGET_CONTACT_MODE,
+    DEFAULT_MOSAIC_CDR_CONTACT_CUTOFF_ANGSTROM,
+    DEFAULT_MOSAIC_CDR_CONTACT_WEIGHT,
+    DEFAULT_MOSAIC_CDR_NUM_TARGET_CONTACTS,
+    DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_CUTOFF_ANGSTROM,
+    DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPE,
+    DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_WEIGHT,
+    DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PROBABILITY_THRESHOLD,
+    TargetGeometryDriftConfig,
+)
 from esmfold2_pipeline.structure import PreparedTarget
 
 
@@ -43,6 +53,24 @@ class DesignSpec:
     hotspot_num_contacts: int = 1
     hotspot_contact_probability_target: float = 0.6
     hotspot_loss_mode: str | None = None
+    binder_target_contact_mode: str = DEFAULT_BINDER_TARGET_CONTACT_MODE
+    mosaic_cdr_contact_weight: float = DEFAULT_MOSAIC_CDR_CONTACT_WEIGHT
+    mosaic_cdr_contact_cutoff_angstrom: float = (
+        DEFAULT_MOSAIC_CDR_CONTACT_CUTOFF_ANGSTROM
+    )
+    mosaic_cdr_num_target_contacts: int = DEFAULT_MOSAIC_CDR_NUM_TARGET_CONTACTS
+    mosaic_framework_contact_penalty_weight: float = (
+        DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_WEIGHT
+    )
+    mosaic_framework_contact_penalty_cutoff_angstrom: float = (
+        DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_CUTOFF_ANGSTROM
+    )
+    mosaic_framework_contact_probability_threshold: float = (
+        DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PROBABILITY_THRESHOLD
+    )
+    mosaic_framework_contact_penalty_scope: str = (
+        DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPE
+    )
     target_geometry_drift: TargetGeometryDriftConfig | None = None
     artifact_stem: str | None = None
     disable_hf_xet: bool = True

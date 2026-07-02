@@ -162,6 +162,30 @@ def run_campaign(
                             campaign_config.hotspot_contact_probability_target
                         ),
                         hotspot_loss_mode=campaign_config.hotspot_loss_mode,
+                        binder_target_contact_mode=(
+                            campaign_config.binder_target_contact_mode
+                        ),
+                        mosaic_cdr_contact_weight=(
+                            campaign_config.mosaic_cdr_contact_weight
+                        ),
+                        mosaic_cdr_contact_cutoff_angstrom=(
+                            campaign_config.mosaic_cdr_contact_cutoff_angstrom
+                        ),
+                        mosaic_cdr_num_target_contacts=(
+                            campaign_config.mosaic_cdr_num_target_contacts
+                        ),
+                        mosaic_framework_contact_penalty_weight=(
+                            campaign_config.mosaic_framework_contact_penalty_weight
+                        ),
+                        mosaic_framework_contact_penalty_cutoff_angstrom=(
+                            campaign_config.mosaic_framework_contact_penalty_cutoff_angstrom
+                        ),
+                        mosaic_framework_contact_probability_threshold=(
+                            campaign_config.mosaic_framework_contact_probability_threshold
+                        ),
+                        mosaic_framework_contact_penalty_scope=(
+                            campaign_config.mosaic_framework_contact_penalty_scope
+                        ),
                         target_geometry_drift=campaign_config.target_geometry_drift,
                         disable_hf_xet=disable_hf_xet,
                         artifact_stem=cid,

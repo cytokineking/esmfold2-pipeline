@@ -14,9 +14,11 @@ import yaml
 
 from esmfold2_pipeline.artifacts import write_text_atomic
 from esmfold2_pipeline.config import (
+    BINDER_TARGET_CONTACT_MODES,
     DEFAULT_ESMFOLD2_CRITIC_MODEL,
     DEFAULT_ESMFOLD2_INVERSION_MODEL,
     ESMFOLD2_MODEL_ALIASES,
+    MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPES,
     ConfigCheckResult,
     check_campaign_config,
     resolve_esmfold2_model_name,
@@ -320,6 +322,42 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="gradient optimization steps for no-YAML launch",
+    )
+    launch.add_argument(
+        "--binder-target-contact-mode",
+        choices=tuple(sorted(BINDER_TARGET_CONTACT_MODES)),
+        default=None,
+        help="binder-target contact loss mode for no-YAML launch",
+    )
+    launch.add_argument(
+        "--mosaic-cdr-contact-weight",
+        type=float,
+        default=None,
+        help="weight for Mosaic-style CDR contact loss in no-YAML launch",
+    )
+    launch.add_argument(
+        "--mosaic-cdr-contact-cutoff-angstrom",
+        type=float,
+        default=None,
+        help="distogram contact cutoff for Mosaic-style CDR contact loss",
+    )
+    launch.add_argument(
+        "--mosaic-cdr-num-target-contacts",
+        type=int,
+        default=None,
+        help="target contacts averaged per CDR residue for Mosaic-style loss",
+    )
+    launch.add_argument(
+        "--mosaic-framework-contact-penalty-weight",
+        type=float,
+        default=None,
+        help="optional framework contact penalty weight for Mosaic-style loss",
+    )
+    launch.add_argument(
+        "--mosaic-framework-contact-penalty-scope",
+        choices=tuple(sorted(MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPES)),
+        default=None,
+        help="target scope for optional Mosaic-style framework contact penalty",
     )
     launch.add_argument(
         "--max-designs",
@@ -1602,8 +1640,14 @@ def _config_launch_flag_errors(args: argparse.Namespace) -> list[str]:
         "seed_start",
         "model",
         "steps",
+        "binder_target_contact_mode",
+        "mosaic_cdr_contact_weight",
+        "mosaic_cdr_contact_cutoff_angstrom",
+        "mosaic_cdr_num_target_contacts",
+        "mosaic_framework_contact_penalty_weight",
+        "mosaic_framework_contact_penalty_scope",
     ):
-        if getattr(args, name) is not None:
+        if getattr(args, name, None) is not None:
             errors.append(f"--{name.replace('_', '-')}")
     return errors
 
@@ -1645,6 +1689,55 @@ def _generated_launch_errors(args: argparse.Namespace) -> list[str]:
         errors.append("--hotspot requires --target-structure")
 
     scaffold = args.scaffold or "miniprotein"
+    contact_mode = args.binder_target_contact_mode
+    if contact_mode == "mosaic_cdr" and scaffold not in {"scfv", "vhh"}:
+        errors.append("mosaic_cdr contact mode requires --scaffold scfv or vhh")
+
+    mosaic_tuning_flags = (
+        ("--mosaic-cdr-contact-weight", args.mosaic_cdr_contact_weight),
+        (
+            "--mosaic-cdr-contact-cutoff-angstrom",
+            args.mosaic_cdr_contact_cutoff_angstrom,
+        ),
+        ("--mosaic-cdr-num-target-contacts", args.mosaic_cdr_num_target_contacts),
+        (
+            "--mosaic-framework-contact-penalty-weight",
+            args.mosaic_framework_contact_penalty_weight,
+        ),
+        (
+            "--mosaic-framework-contact-penalty-scope",
+            args.mosaic_framework_contact_penalty_scope,
+        ),
+    )
+    if contact_mode != "mosaic_cdr":
+        for flag, value in mosaic_tuning_flags:
+            if value is not None:
+                errors.append(
+                    f"{flag} requires --binder-target-contact-mode mosaic_cdr"
+                )
+    else:
+        if (
+            args.mosaic_cdr_contact_weight is not None
+            and args.mosaic_cdr_contact_weight < 0
+        ):
+            errors.append("--mosaic-cdr-contact-weight must be non-negative")
+        if (
+            args.mosaic_cdr_contact_cutoff_angstrom is not None
+            and args.mosaic_cdr_contact_cutoff_angstrom <= 0
+        ):
+            errors.append("--mosaic-cdr-contact-cutoff-angstrom must be positive")
+        if (
+            args.mosaic_cdr_num_target_contacts is not None
+            and args.mosaic_cdr_num_target_contacts <= 0
+        ):
+            errors.append("--mosaic-cdr-num-target-contacts must be positive")
+        if (
+            args.mosaic_framework_contact_penalty_weight is not None
+            and args.mosaic_framework_contact_penalty_weight < 0
+        ):
+            errors.append(
+                "--mosaic-framework-contact-penalty-weight must be non-negative"
+            )
     if scaffold in {"scfv", "vhh"}:
         if args.frameworks is None:
             errors.append(f"--frameworks is required when --scaffold {scaffold}")
@@ -1681,6 +1774,29 @@ def _generated_launch_config(args: argparse.Namespace) -> dict:
     if args.steps is not None:
         campaign["steps"] = args.steps
 
+    loss: dict[str, object] = {}
+    contact_mode = args.binder_target_contact_mode
+    if contact_mode is not None:
+        loss["binder_target_contact_mode"] = contact_mode
+    if args.mosaic_cdr_contact_weight is not None:
+        loss["mosaic_cdr_contact_weight"] = args.mosaic_cdr_contact_weight
+    if args.mosaic_cdr_contact_cutoff_angstrom is not None:
+        loss["mosaic_cdr_contact_cutoff_angstrom"] = (
+            args.mosaic_cdr_contact_cutoff_angstrom
+        )
+    if args.mosaic_cdr_num_target_contacts is not None:
+        loss["mosaic_cdr_num_target_contacts"] = (
+            args.mosaic_cdr_num_target_contacts
+        )
+    if args.mosaic_framework_contact_penalty_weight is not None:
+        loss["mosaic_framework_contact_penalty_weight"] = (
+            args.mosaic_framework_contact_penalty_weight
+        )
+    if args.mosaic_framework_contact_penalty_scope is not None:
+        loss["mosaic_framework_contact_penalty_scope"] = (
+            args.mosaic_framework_contact_penalty_scope
+        )
+
     target: dict[str, object] = {"name": args.target_name}
     if args.target_sequence is not None:
         target["sequence"] = args.target_sequence
@@ -1691,12 +1807,15 @@ def _generated_launch_config(args: argparse.Namespace) -> dict:
         if args.hotspot is not None:
             target["hotspots"] = ",".join(args.hotspot)
 
-    return {
+    config = {
         "target": target,
         "binder": binder,
         "campaign": campaign,
         "output": str(args.out),
     }
+    if loss:
+        config["loss"] = loss
+    return config
 
 
 def _split_cli_values(values: list[str]) -> list[str]:

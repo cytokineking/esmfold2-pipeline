@@ -174,6 +174,12 @@ generated config before running).
 | `--target-name NAME` | yes | — | Display name for the target (required for no-YAML launch). |
 | `--chains A,C` | no | all chains | Structure-target chains to include (also `--chains A C`). |
 | `--hotspot A:88,91` | no | none | Hotspot selector; repeatable. |
+| `--binder-target-contact-mode legacy\|mosaic_cdr` | no | `legacy` | Binder-target contact loss mode. `mosaic_cdr` is scFv/VHH-only. |
+| `--mosaic-cdr-contact-weight X` | no | `0.5` | Weight for Mosaic-style CDR contact loss. Requires `--binder-target-contact-mode mosaic_cdr`. |
+| `--mosaic-cdr-contact-cutoff-angstrom A` | no | `22.0` | Distogram cutoff for Mosaic-style CDR contact loss. Requires `mosaic_cdr`. |
+| `--mosaic-cdr-num-target-contacts N` | no | `3` | Target contacts averaged per CDR residue. Requires `mosaic_cdr`. |
+| `--mosaic-framework-contact-penalty-weight X` | no | `0.0` | Optional framework contact penalty weight. Requires `mosaic_cdr`; default is off. |
+| `--mosaic-framework-contact-penalty-scope auto\|hotspot\|target_all` | no | `auto` | Target scope for the optional framework contact penalty. Requires `mosaic_cdr`. |
 | `--length 80-140` | no | `60-200` | Miniprotein length or range. |
 | `--steps N` | no | `2` | Optimization steps (use `150` for production). |
 | `--seed-start N` | no | `0` | First deterministic seed. |

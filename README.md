@@ -55,7 +55,9 @@ who wants them).
 
 ## Highlights
 
-Built on the ESM design method, this pipeline adds:
+Built on the ESM design method, and incorporating antibody-targeting concepts
+from [escalante-bio/mosaic](https://github.com/escalante-bio/mosaic), this
+pipeline adds:
 
 - **Structural template inputs.** Design against a real PDB/mmCIF target, and
   build antibodies on real clinical framework **structures** (scFv VH–VL and VHH
@@ -63,7 +65,9 @@ Built on the ESM design method, this pipeline adds:
 - **Multi-chain target support.** Target complexes and assemblies, not just a
   single chain, with optional chain-pair geometry conditioning.
 - **Hotspot / epitope targeting.** Steer designs toward specific target residues
-  and gate the final selection on real hotspot contact.
+  and gate the final selection on real hotspot contact. For scFv and VHH
+  campaigns, an optional Mosaic-style CDR contact mode can make CDRs carry the
+  binder-target attraction, with an optional framework contact penalty.
 - **Distogram conditioning.** Inject the target's own geometry as a structural
   prior during both design and scoring; partial templates handle unresolved
   residues automatically.
@@ -228,7 +232,12 @@ uv run esmfold2-pipeline launch \
 ```
 
 VHH reuses the antibody framework-template path and reports designed CDRs as
-heavy-chain columns.
+heavy-chain columns. For VHH or scFv epitope targeting, use
+`--binder-target-contact-mode mosaic_cdr` to replace the legacy whole-binder
+target attraction with a CDR-scoped contact loss. Add
+`--mosaic-framework-contact-penalty-weight` only when you explicitly want to
+discourage framework-mediated target contacts; `1.0` is a reasonable starting
+weight for that penalty.
 </details>
 
 ## Results

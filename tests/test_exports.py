@@ -490,6 +490,97 @@ output: {campaign_dir}
             self.assertEqual(selection.selected_count, 0)
             self.assertEqual(_read_csv(selection.ranked_csv), [])
 
+    def test_mosaic_cdr_metrics_are_exported_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            campaign_dir = root / "campaign"
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                f"""
+target:
+  name: cd45
+binder:
+  scaffold: vhh
+  framework: caplacizumab
+campaign:
+  num_designs: 1
+  critics:
+    - ESMFold2-Experimental-Fast
+  steps: 1
+loss:
+  binder_target_contact_mode: mosaic_cdr
+  mosaic_cdr_contact_weight: 0.8
+  mosaic_framework_contact_penalty_weight: 0.2
+  mosaic_framework_contact_penalty_scope: target_all
+output: {campaign_dir}
+""".lstrip()
+            )
+
+            def fake_mosaic_artifact(**kwargs) -> DesignCandidateArtifact:
+                artifact = _fake_vhh_design_artifact(**kwargs)
+                design_metrics = dict(artifact.design_metrics)
+                design_metrics.update(
+                    {
+                        "binder_target_contact_mode": "mosaic_cdr",
+                        "mosaic_cdr_contact_loss_enabled": True,
+                        "mosaic_cdr_contact_weight": 0.8,
+                        "mosaic_cdr_contact_cutoff_angstrom": 22.0,
+                        "mosaic_cdr_num_target_contacts": 3,
+                        "mosaic_cdr_contact_scope": "target_all",
+                        "mosaic_cdr_contact_probability_mean": 0.7,
+                        "mosaic_cdr_contact_probability_min": 0.6,
+                        "mosaic_cdr_contact_probability_max": 0.8,
+                        "mosaic_cdr_contact_loss": 0.04,
+                        "mosaic_framework_contact_penalty_enabled": True,
+                        "mosaic_framework_contact_penalty_weight": 0.2,
+                        "mosaic_framework_contact_penalty_scope": "target_all",
+                        "mosaic_framework_contact_penalty_target_scope": (
+                            "target_all"
+                        ),
+                        "mosaic_framework_contact_probability_mean": 0.1,
+                        "mosaic_framework_contact_probability_max": 0.18,
+                        "mosaic_framework_contact_penalty_loss": 0.0,
+                    }
+                )
+                return DesignCandidateArtifact(
+                    candidate_id=artifact.candidate_id,
+                    designed_sequence=artifact.designed_sequence,
+                    sequence_path=artifact.sequence_path,
+                    critic_name=artifact.critic_name,
+                    structure_path=artifact.structure_path,
+                    design_metrics=design_metrics,
+                    critic_metrics=artifact.critic_metrics,
+                )
+
+            plan_campaign(config_path)
+            with patch(
+                "esmfold2_pipeline.execution.local.run_binder_design_artifact",
+                side_effect=fake_mosaic_artifact,
+            ):
+                run_campaign(campaign_dir, worker_id="mosaic-export-test")
+
+            aggregate = aggregate_campaign(campaign_dir)
+            metadata_line = aggregate.metrics_csv.read_text().splitlines()[0]
+            rows = _read_csv(aggregate.metrics_csv)
+
+            self.assertIn("binder_target_contact_mode=mosaic_cdr", metadata_line)
+            self.assertIn(
+                "mosaic_framework_contact_penalty_scope=target_all",
+                metadata_line,
+            )
+            self.assertEqual(rows[0]["binder_target_contact_mode"], "mosaic_cdr")
+            self.assertEqual(rows[0]["mosaic_cdr_contact_scope"], "target_all")
+            self.assertEqual(rows[0]["mosaic_cdr_contact_probability_mean"], "0.7")
+            self.assertEqual(
+                rows[0]["mosaic_framework_contact_penalty_scope"],
+                "target_all",
+            )
+            self.assertEqual(
+                rows[0]["mosaic_framework_contact_penalty_target_scope"],
+                "target_all",
+            )
+            self.assertEqual(rows[0]["mosaic_framework_contact_penalty_loss"], "0")
+
     def test_hotspot_filter_prefers_lower_iptm_contact_over_high_iptm_miss(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

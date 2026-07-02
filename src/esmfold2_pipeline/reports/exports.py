@@ -60,6 +60,28 @@ TARGET_GEOMETRY_DRIFT_FIELDS = [
     "target_geometry_drift_aligned_rmsd",
 ]
 
+MOSAIC_CDR_FIELDS = [
+    "binder_target_contact_mode",
+    "mosaic_cdr_contact_loss_enabled",
+    "mosaic_cdr_contact_weight",
+    "mosaic_cdr_contact_cutoff_angstrom",
+    "mosaic_cdr_num_target_contacts",
+    "mosaic_cdr_contact_scope",
+    "mosaic_cdr_contact_probability_mean",
+    "mosaic_cdr_contact_probability_min",
+    "mosaic_cdr_contact_probability_max",
+    "mosaic_cdr_contact_loss",
+    "mosaic_framework_contact_penalty_enabled",
+    "mosaic_framework_contact_penalty_weight",
+    "mosaic_framework_contact_penalty_cutoff_angstrom",
+    "mosaic_framework_contact_penalty_scope",
+    "mosaic_framework_contact_penalty_target_scope",
+    "mosaic_framework_contact_probability_threshold",
+    "mosaic_framework_contact_probability_mean",
+    "mosaic_framework_contact_probability_max",
+    "mosaic_framework_contact_penalty_loss",
+]
+
 SCFV_CDR_FIELDS = [
     "cdrh1",
     "cdrh2",
@@ -1954,6 +1976,11 @@ def _metric_row(row: sqlite3.Row) -> dict[str, Any]:
         "target_geometry_drift_aligned_rmsd": critic_metrics.get(
             "target_geometry_drift_aligned_rmsd"
         ),
+        **{
+            field: design_metrics.get(field)
+            for field in MOSAIC_CDR_FIELDS
+            if field in design_metrics
+        },
         "final_loss": final_loss,
     }
 
@@ -2282,6 +2309,19 @@ def _report_fields(
         for offset, field in enumerate(TARGET_GEOMETRY_DRIFT_FIELDS):
             if field not in fields:
                 fields.insert(insertion_index + offset, field)
+    if any(
+        row.get(field) not in (None, "")
+        for field in MOSAIC_CDR_FIELDS
+        for row in rows
+    ):
+        insertion_index = (
+            fields.index("final_loss")
+            if "final_loss" in fields
+            else len(fields)
+        )
+        for offset, field in enumerate(MOSAIC_CDR_FIELDS):
+            if field not in fields:
+                fields.insert(insertion_index + offset, field)
     has_hotspot_metrics = any(_row_has_hotspot_metrics(row) for row in rows)
     if not (_campaign_has_configured_hotspots(root) or has_hotspot_metrics):
         return fields
@@ -2363,6 +2403,19 @@ def _campaign_csv_metadata(
         "steps": campaign.get("steps"),
         "critic": critic_text,
     }
+    if loss.get("binder_target_contact_mode") == "mosaic_cdr":
+        result["binder_target_contact_mode"] = loss.get(
+            "binder_target_contact_mode"
+        )
+        result["mosaic_cdr_contact_weight"] = loss.get(
+            "mosaic_cdr_contact_weight"
+        )
+        result["mosaic_framework_contact_penalty_weight"] = loss.get(
+            "mosaic_framework_contact_penalty_weight"
+        )
+        result["mosaic_framework_contact_penalty_scope"] = loss.get(
+            "mosaic_framework_contact_penalty_scope"
+        )
     if "enabled" in drift:
         result["target_geometry_drift_enabled"] = drift.get("enabled")
         if drift.get("enabled"):

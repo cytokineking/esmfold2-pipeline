@@ -83,6 +83,64 @@ target:
   hotspots: "A:88,91"
 ```
 
+Hotspots have two roles:
+
+- They steer the design loss when the selected loss mode uses hotspot targeting.
+- They enable final hotspot-contact gating during selection and validation
+  reporting.
+
+### Mosaic CDR contact mode for scFv and VHH
+
+For antibody scaffolds, the default `legacy` contact mode keeps the original
+whole-binder target attraction and can add the usual hotspot loss on top. This
+means framework residues can still help satisfy the baseline binder-target
+attraction.
+
+Use `loss.binder_target_contact_mode: mosaic_cdr` when you want Mosaic-style
+CDR-driven binding for scFv or VHH campaigns. In this mode, the original
+whole-binder target attraction is replaced by a CDR-to-target entropy contact
+loss:
+
+- no `target.hotspots`: CDRs are encouraged to contact any selected target
+  residue.
+- with `target.hotspots`: CDRs are encouraged to contact the hotspot residues.
+- framework residues are not part of the attractive contact term.
+
+The legacy design-time hotspot loss is not added on top of this mode. Hotspots
+instead define the target-side mask for the Mosaic CDR attraction, while the
+hotspot critic cutoff still controls final hotspot pass/fail reporting and
+selection when hotspot gating is enabled.
+
+An optional framework contact penalty can discourage framework-mediated binding.
+It is disabled by default and must be enabled with a nonzero
+`mosaic_framework_contact_penalty_weight`. A good first enabled value is `1.0`.
+
+```yaml
+target:
+  structure: /path/to/pmhc.pdb
+  chains: [A, C]
+  hotspots: "C:1-10"
+  conditioning:
+    mode: distogram
+    assembly: true
+
+binder:
+  scaffold: vhh
+  frameworks: all
+
+loss:
+  binder_target_contact_mode: mosaic_cdr
+  mosaic_cdr_contact_weight: 0.5
+  mosaic_cdr_contact_cutoff_angstrom: 22.0
+  mosaic_cdr_num_target_contacts: 3
+  mosaic_framework_contact_penalty_weight: 1.0
+  mosaic_framework_contact_penalty_scope: target_all
+```
+
+The framework penalty scope affects only the penalty target mask. It does not
+change the CDR attraction: CDRs still target hotspots when hotspots are present,
+and the full selected target when they are absent.
+
 ## Structure indexing
 
 Use `structure_indexing: auth_seq_id` when you want selectors to match author

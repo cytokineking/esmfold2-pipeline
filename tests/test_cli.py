@@ -1225,6 +1225,134 @@ output: {campaign_dir}
                 ],
             )
 
+    def test_launch_without_yaml_generates_mosaic_cdr_mode_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            campaign_dir = Path(tmpdir) / "campaign"
+
+            result = _run_cli(
+                "launch",
+                "--target-name",
+                "custom_vhh_target",
+                "--target-sequence",
+                "ACDEFGHIKLMNPQRSTVWY",
+                "--scaffold",
+                "vhh",
+                "--frameworks",
+                "caplacizumab",
+                "--num-designs",
+                "1",
+                "--binder-target-contact-mode",
+                "mosaic_cdr",
+                "--mosaic-cdr-contact-weight",
+                "0.7",
+                "--mosaic-cdr-contact-cutoff-angstrom",
+                "18.0",
+                "--mosaic-cdr-num-target-contacts",
+                "2",
+                "--mosaic-framework-contact-penalty-weight",
+                "0.25",
+                "--mosaic-framework-contact-penalty-scope",
+                "target_all",
+                "--out",
+                campaign_dir,
+                "--max-shards",
+                "0",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            resolved = yaml.safe_load((campaign_dir / "resolved_config.yaml").read_text())
+            self.assertEqual(
+                resolved["loss"]["binder_target_contact_mode"],
+                "mosaic_cdr",
+            )
+            self.assertEqual(resolved["loss"]["mosaic_cdr_contact_weight"], 0.7)
+            self.assertEqual(
+                resolved["loss"]["mosaic_cdr_contact_cutoff_angstrom"],
+                18.0,
+            )
+            self.assertEqual(resolved["loss"]["mosaic_cdr_num_target_contacts"], 2)
+            self.assertEqual(
+                resolved["loss"]["mosaic_framework_contact_penalty_weight"],
+                0.25,
+            )
+            self.assertEqual(
+                resolved["loss"]["mosaic_framework_contact_penalty_scope"],
+                "target_all",
+            )
+
+    def test_launch_rejects_mosaic_cdr_mode_for_miniprotein(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = _run_cli(
+                "launch",
+                "--target-name",
+                "custom_miniprotein_target",
+                "--target-sequence",
+                "ACDEFGHIKLMNPQRSTVWY",
+                "--num-designs",
+                "1",
+                "--binder-target-contact-mode",
+                "mosaic_cdr",
+                "--out",
+                Path(tmpdir) / "campaign",
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("mosaic_cdr contact mode requires", result.stdout)
+
+    def test_launch_rejects_mosaic_tuning_flags_without_mosaic_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = _run_cli(
+                "launch",
+                "--target-name",
+                "custom_vhh_target",
+                "--target-sequence",
+                "ACDEFGHIKLMNPQRSTVWY",
+                "--scaffold",
+                "vhh",
+                "--frameworks",
+                "caplacizumab",
+                "--num-designs",
+                "1",
+                "--mosaic-cdr-contact-weight",
+                "0.7",
+                "--out",
+                Path(tmpdir) / "campaign",
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn(
+                "--mosaic-cdr-contact-weight requires "
+                "--binder-target-contact-mode mosaic_cdr",
+                result.stdout,
+            )
+
+    def test_launch_rejects_mosaic_penalty_scope_without_mosaic_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = _run_cli(
+                "launch",
+                "--target-name",
+                "custom_vhh_target",
+                "--target-sequence",
+                "ACDEFGHIKLMNPQRSTVWY",
+                "--scaffold",
+                "vhh",
+                "--frameworks",
+                "caplacizumab",
+                "--num-designs",
+                "1",
+                "--mosaic-framework-contact-penalty-scope",
+                "target_all",
+                "--out",
+                Path(tmpdir) / "campaign",
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn(
+                "--mosaic-framework-contact-penalty-scope requires "
+                "--binder-target-contact-mode mosaic_cdr",
+                result.stdout,
+            )
+
     def test_launch_requires_frameworks_for_scfv(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             result = _run_cli(

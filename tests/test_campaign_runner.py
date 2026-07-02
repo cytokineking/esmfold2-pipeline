@@ -296,6 +296,20 @@ output: {root / "campaign"}
             self.assertEqual(config.hotspot_num_contacts, 1)
             self.assertEqual(config.hotspot_contact_probability_target, 0.6)
             self.assertEqual(config.hotspot_loss_mode, "entropy_hotspot")
+            self.assertEqual(config.binder_target_contact_mode, "legacy")
+            self.assertEqual(config.mosaic_cdr_contact_weight, 0.5)
+            self.assertEqual(config.mosaic_cdr_contact_cutoff_angstrom, 22.0)
+            self.assertEqual(config.mosaic_cdr_num_target_contacts, 3)
+            self.assertEqual(config.mosaic_framework_contact_penalty_weight, 0.0)
+            self.assertEqual(
+                config.mosaic_framework_contact_penalty_cutoff_angstrom,
+                22.0,
+            )
+            self.assertEqual(
+                config.mosaic_framework_contact_probability_threshold,
+                0.2,
+            )
+            self.assertEqual(config.mosaic_framework_contact_penalty_scope, "auto")
             self.assertFalse(config.target_geometry_drift.enabled)
             self.assertEqual(config.target_geometry_drift.weight, 2.5)
             self.assertEqual(config.target_geometry_drift.tolerance_angstrom, 0.1)
@@ -558,6 +572,136 @@ output: {root / "campaign"}
             self.assertEqual(framework.cdr_report_names, ("hcdr1", "hcdr2", "hcdr3"))
             self.assertEqual(framework.cdr_lengths["cdr3"], (18, 24))
 
+    def test_config_accepts_mosaic_cdr_mode_for_antibody_scaffold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                f"""
+target:
+  name: ctla4
+binder:
+  scaffold: vhh
+  framework: caplacizumab
+campaign:
+  num_designs: 1
+  steps: 1
+loss:
+  binder_target_contact_mode: mosaic_cdr
+  mosaic_cdr_contact_weight: 0.75
+  mosaic_cdr_contact_cutoff_angstrom: 18.0
+  mosaic_cdr_num_target_contacts: 2
+  mosaic_framework_contact_penalty_weight: 0.25
+  mosaic_framework_contact_penalty_cutoff_angstrom: 16.0
+  mosaic_framework_contact_probability_threshold: 0.15
+  mosaic_framework_contact_penalty_scope: target_all
+output: {root / "campaign"}
+""".lstrip()
+            )
+
+            config = load_campaign_config(config_path)
+
+            self.assertEqual(config.binder_target_contact_mode, "mosaic_cdr")
+            self.assertEqual(config.mosaic_cdr_contact_weight, 0.75)
+            self.assertEqual(config.mosaic_cdr_contact_cutoff_angstrom, 18.0)
+            self.assertEqual(config.mosaic_cdr_num_target_contacts, 2)
+            self.assertEqual(config.mosaic_framework_contact_penalty_weight, 0.25)
+            self.assertEqual(
+                config.mosaic_framework_contact_penalty_cutoff_angstrom,
+                16.0,
+            )
+            self.assertEqual(
+                config.mosaic_framework_contact_probability_threshold,
+                0.15,
+            )
+            self.assertEqual(
+                config.mosaic_framework_contact_penalty_scope,
+                "target_all",
+            )
+            self.assertEqual(
+                config.to_resolved_dict()["loss"]["binder_target_contact_mode"],
+                "mosaic_cdr",
+            )
+            self.assertEqual(
+                config.to_resolved_dict()["loss"][
+                    "mosaic_framework_contact_penalty_scope"
+                ],
+                "target_all",
+            )
+
+    def test_config_rejects_invalid_mosaic_framework_penalty_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                f"""
+target:
+  name: ctla4
+binder:
+  scaffold: vhh
+  framework: caplacizumab
+campaign:
+  num_designs: 1
+  steps: 1
+loss:
+  binder_target_contact_mode: mosaic_cdr
+  mosaic_framework_contact_penalty_scope: target_hotspot
+output: {root / "campaign"}
+""".lstrip()
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "loss.mosaic_framework_contact_penalty_scope",
+            ):
+                load_campaign_config(config_path)
+
+    def test_config_rejects_mosaic_cdr_mode_for_miniprotein(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                f"""
+target:
+  name: ctla4
+binder:
+  scaffold: miniprotein
+campaign:
+  num_designs: 1
+  steps: 1
+loss:
+  binder_target_contact_mode: mosaic_cdr
+output: {root / "campaign"}
+""".lstrip()
+            )
+
+            with self.assertRaisesRegex(ValueError, "scfv or vhh"):
+                load_campaign_config(config_path)
+
+    def test_config_rejects_zero_mosaic_framework_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                f"""
+target:
+  name: ctla4
+binder:
+  scaffold: vhh
+  framework: caplacizumab
+campaign:
+  num_designs: 1
+  steps: 1
+loss:
+  binder_target_contact_mode: mosaic_cdr
+  mosaic_framework_contact_probability_threshold: 0.0
+output: {root / "campaign"}
+""".lstrip()
+            )
+
+            with self.assertRaisesRegex(ValueError, "greater than 0"):
+                load_campaign_config(config_path)
+
     def test_config_and_plan_round_robin_multiple_vhh_frameworks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -737,6 +881,69 @@ output: {campaign_dir}
             self.assertTrue(
                 all(call["binder_framework_cdr_lengths"] is not None for call in calls)
             )
+
+    def test_run_campaign_passes_mosaic_cdr_mode_adapter_kwargs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            campaign_dir = root / "campaign"
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                f"""
+target:
+  name: cd45
+binder:
+  scaffold: vhh
+  framework: caplacizumab
+campaign:
+  num_designs: 1
+  steps: 1
+loss:
+  binder_target_contact_mode: mosaic_cdr
+  mosaic_cdr_contact_weight: 0.8
+  mosaic_cdr_contact_cutoff_angstrom: 19.0
+  mosaic_cdr_num_target_contacts: 2
+  mosaic_framework_contact_penalty_weight: 0.3
+  mosaic_framework_contact_penalty_scope: target_all
+output: {campaign_dir}
+""".lstrip()
+            )
+
+            plan_campaign(config_path)
+
+            def fake_vhh_artifact(**kwargs):
+                self.assertEqual(kwargs["binder_scaffold"], "vhh")
+                self.assertEqual(kwargs["binder_target_contact_mode"], "mosaic_cdr")
+                self.assertEqual(kwargs["mosaic_cdr_contact_weight"], 0.8)
+                self.assertEqual(
+                    kwargs["mosaic_cdr_contact_cutoff_angstrom"],
+                    19.0,
+                )
+                self.assertEqual(kwargs["mosaic_cdr_num_target_contacts"], 2)
+                self.assertEqual(
+                    kwargs["mosaic_framework_contact_penalty_weight"],
+                    0.3,
+                )
+                self.assertEqual(
+                    kwargs["mosaic_framework_contact_penalty_cutoff_angstrom"],
+                    22.0,
+                )
+                self.assertEqual(
+                    kwargs["mosaic_framework_contact_probability_threshold"],
+                    0.2,
+                )
+                self.assertEqual(
+                    kwargs["mosaic_framework_contact_penalty_scope"],
+                    "target_all",
+                )
+                return _fake_vhh_design_artifact(**kwargs)
+
+            with patch(
+                "esmfold2_pipeline.execution.local.run_binder_design_artifact",
+                side_effect=fake_vhh_artifact,
+            ):
+                result = run_campaign(campaign_dir, worker_id="vhh-mosaic-worker")
+
+            self.assertEqual(result.completed_shards, 1)
 
     def test_run_campaign_passes_target_drift_to_scfv_adapter_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
