@@ -754,6 +754,151 @@ class ProtenixRunnerTest(unittest.TestCase):
             finally:
                 conn.close()
 
+    def test_local_runner_calculates_ipsae_from_relative_campaign_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            campaign_dir = _run_fake_campaign(root)
+            fake_protenix = _write_fake_protenix_without_summary_ipsae(root)
+            fake_ipsae = _write_fake_ipsae_script(root)
+            plan_validation_tasks(campaign_dir)
+
+            cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                result = run_local_protenix_validation(
+                    Path("campaign"),
+                    worker_id="protenix-relative-test",
+                    gpu_id="0",
+                    config=ProtenixRunnerConfig(
+                        protenix_command=(sys.executable, str(fake_protenix)),
+                        ipsae_script_path=fake_ipsae,
+                        seeds=(101,),
+                        n_sample=1,
+                        timeout_seconds=10,
+                    ),
+                )
+            finally:
+                os.chdir(cwd)
+
+            self.assertEqual(result.completed_tasks, 1)
+            self.assertEqual(result.failed_tasks, 0)
+            conn = connect_database(campaign_dir / "campaign.sqlite")
+            try:
+                task = conn.execute("SELECT status, ipsae, metrics_json FROM validation_tasks").fetchone()
+                self.assertEqual(task["status"], "completed")
+                self.assertAlmostEqual(task["ipsae"], 0.73)
+                metrics = json.loads(task["metrics_json"])
+                self.assertAlmostEqual(metrics["validation_ipSAE"], 0.73)
+                self.assertEqual(metrics["validation_ipSAE_adapter"], "ipsae.py")
+                self.assertNotIn("validation_ipSAE_adapter_error", metrics)
+            finally:
+                conn.close()
+
+    def test_local_runner_allows_missing_ipsae_without_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            campaign_dir = _run_fake_campaign(root)
+            fake_protenix = _write_fake_protenix_without_summary_ipsae(root)
+            fake_ipsae = _write_failing_ipsae_script(root)
+            plan_validation_tasks(campaign_dir)
+
+            result = run_local_protenix_validation(
+                campaign_dir,
+                worker_id="protenix-missing-ipsae-test",
+                gpu_id="0",
+                config=ProtenixRunnerConfig(
+                    protenix_command=(sys.executable, str(fake_protenix)),
+                    ipsae_script_path=fake_ipsae,
+                    seeds=(101,),
+                    n_sample=1,
+                    timeout_seconds=10,
+                ),
+            )
+
+            self.assertEqual(result.completed_tasks, 1)
+            self.assertEqual(result.failed_tasks, 0)
+            conn = connect_database(campaign_dir / "campaign.sqlite")
+            try:
+                task = conn.execute(
+                    "SELECT status, ipsae, output_structure_path, metrics_json FROM validation_tasks"
+                ).fetchone()
+                self.assertEqual(task["status"], "completed")
+                self.assertIsNone(task["ipsae"])
+                self.assertTrue(
+                    task["output_structure_path"].startswith(
+                        "validation/protenix_v2/structures/passing/"
+                    )
+                )
+                metrics = json.loads(task["metrics_json"])
+                self.assertTrue(metrics["validation_passed"])
+                self.assertIn("validation_ipSAE_adapter_error", metrics)
+                self.assertEqual(
+                    metrics["validation_ipSAE_warning"],
+                    "missing scoped binder-target validation_ipSAE",
+                )
+                self.assertNotIn("fail_reason", metrics)
+
+                structure = conn.execute(
+                    "SELECT status, scoped_ipsae, metrics_json FROM validation_structures"
+                ).fetchone()
+                self.assertEqual(structure["status"], "passing")
+                self.assertIsNone(structure["scoped_ipsae"])
+            finally:
+                conn.close()
+
+    def test_local_runner_rejects_missing_ipsae_when_threshold_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            campaign_dir = _run_fake_campaign(root)
+            fake_protenix = _write_fake_protenix_without_summary_ipsae(root)
+            fake_ipsae = _write_failing_ipsae_script(root)
+            plan_validation_tasks(
+                campaign_dir,
+                config=ValidationPlanConfig(
+                    model_name="protenix-v2",
+                    min_validation_ipsae=0.60,
+                ),
+            )
+
+            result = run_local_protenix_validation(
+                campaign_dir,
+                worker_id="protenix-missing-ipsae-threshold-test",
+                gpu_id="0",
+                config=ProtenixRunnerConfig(
+                    protenix_command=(sys.executable, str(fake_protenix)),
+                    ipsae_script_path=fake_ipsae,
+                    seeds=(101,),
+                    n_sample=1,
+                    min_validation_ipsae=0.60,
+                    timeout_seconds=10,
+                ),
+            )
+
+            self.assertEqual(result.completed_tasks, 1)
+            self.assertEqual(result.failed_tasks, 0)
+            conn = connect_database(campaign_dir / "campaign.sqlite")
+            try:
+                task = conn.execute(
+                    "SELECT status, ipsae, output_structure_path, metrics_json FROM validation_tasks"
+                ).fetchone()
+                self.assertEqual(task["status"], "completed")
+                self.assertIsNone(task["ipsae"])
+                self.assertTrue(
+                    task["output_structure_path"].startswith(
+                        "validation/protenix_v2/structures/rejected/"
+                    )
+                )
+                metrics = json.loads(task["metrics_json"])
+                self.assertFalse(metrics["validation_passed"])
+                self.assertFalse(metrics["validation_ipSAE_pass"])
+                self.assertEqual(metrics["min_validation_ipSAE"], 0.60)
+                self.assertIn(
+                    "missing scoped binder-target validation_ipSAE",
+                    metrics["fail_reason"],
+                )
+            finally:
+                conn.close()
+
     def test_validation_task_cannot_complete_before_selected_cif_is_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             campaign_dir = _run_fake_campaign(Path(tmpdir))
@@ -1487,6 +1632,19 @@ B    A     15   15   asym  0.350000    0.410000    0.350000    0.820    0.100000
 A    B     15   15   max   0.730000    0.550000    0.440000    0.820    0.100000      0.4500     0.6700     0.8900       5    21      9    1.04    7.28    1.04      2       7       2       7   model
 '''
 )
+""".lstrip()
+    )
+    return script
+
+
+def _write_failing_ipsae_script(root: Path) -> Path:
+    script = root / "fake_failing_ipsae.py"
+    script.write_text(
+        """
+import sys
+
+print("simulated ipSAE failure", file=sys.stderr)
+raise SystemExit(2)
 """.lstrip()
     )
     return script

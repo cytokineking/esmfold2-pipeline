@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -540,6 +541,84 @@ class ValidationMsaPrefetchTest(unittest.TestCase):
                 "SELECT attempt_count FROM validation_tasks WHERE validation_id = 'val_cand'"
             ).fetchone()
             self.assertEqual(task["attempt_count"], 0)
+            conn.close()
+
+    def test_ready_msa_job_keeps_campaign_prefixed_relative_cache_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            campaign_dir = root / "gpu_runs" / "campaign"
+            campaign_dir.mkdir(parents=True)
+            conn = _campaign_db(
+                campaign_dir,
+                validation={"msa": {"binder": "single_sequence"}},
+            )
+            store = CampaignStore(conn)
+            _insert_completed_candidate(store, iptm=0.9)
+            store.create_validation_task(
+                validation_id="val_cand",
+                candidate_id="cand_000000_0000",
+                model_name="protenix-v2",
+                validation_config_hash="hash",
+                selection_rank=1,
+            )
+            cache_dir = (
+                campaign_dir
+                / "validation"
+                / "protenix_v2"
+                / "msa_cache"
+                / "binder"
+                / "ready"
+            )
+            cache_dir.mkdir(parents=True)
+            (cache_dir / "non_pairing.a3m").write_text(">query\nACDEFGHIK\n")
+            (cache_dir / "metadata.json").write_text("{}")
+            campaign_prefixed_cache_dir = cache_dir.relative_to(root)
+            store.create_or_update_msa_job(
+                msa_job_id="msa_campaign_prefixed_cache",
+                scope="miniprotein_single_sequence",
+                cache_key="miniprotein:test",
+                msa_context_hash="ctx",
+                candidate_id="cand_000000_0000",
+                representative_sequence="ACDEFGHIK",
+                member_sequences=("ACDEFGHIK",),
+                metadata={},
+                validation_config_hash="hash",
+            )
+            store.complete_msa_job(
+                msa_job_id="msa_campaign_prefixed_cache",
+                cache_paths={
+                    "cache_dir": str(campaign_prefixed_cache_dir),
+                    "non_pairing_path": str(
+                        campaign_prefixed_cache_dir / "non_pairing.a3m"
+                    ),
+                    "metadata_path": str(campaign_prefixed_cache_dir / "metadata.json"),
+                },
+            )
+
+            cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                reopened = store.reopen_ready_msa_jobs_with_missing_cache(
+                    base_dir=campaign_dir
+                )
+            finally:
+                os.chdir(cwd)
+
+            self.assertEqual(reopened, 0)
+            job = conn.execute(
+                """
+                SELECT status, error_message
+                FROM validation_msa_jobs
+                WHERE msa_job_id = 'msa_campaign_prefixed_cache'
+                """
+            ).fetchone()
+            self.assertEqual(job["status"], "ready")
+            self.assertIsNone(job["error_message"])
+            ready = store.claim_next_pending_validation_tasks(
+                worker_id="validator",
+                batch_size=1,
+            )
+            self.assertEqual([claim.validation_id for claim in ready], ["val_cand"])
             conn.close()
 
     def test_status_reports_msa_blocked_and_failed_dependencies(self) -> None:

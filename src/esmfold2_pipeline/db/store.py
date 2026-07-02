@@ -2151,11 +2151,14 @@ def _first_missing_msa_cache_path(
 
     base = Path(base_dir) if base_dir is not None else None
 
-    def resolve(raw: str) -> Path:
+    def resolve_candidates(raw: str) -> list[Path]:
         path = Path(raw).expanduser()
+        candidates = [path]
         if base is not None and not path.is_absolute():
-            path = base / path
-        return path
+            based = base / path
+            if based != path:
+                candidates.append(based)
+        return candidates
 
     def walk(item: Any) -> str | None:
         if isinstance(item, dict):
@@ -2163,9 +2166,9 @@ def _first_missing_msa_cache_path(
                 raw = item.get(key)
                 if not isinstance(raw, str) or not raw.strip():
                     continue
-                path = resolve(raw.strip())
-                if not path.exists():
-                    return str(path)
+                candidates = resolve_candidates(raw.strip())
+                if not any(path.exists() for path in candidates):
+                    return str(candidates[-1])
             for nested in item.values():
                 missing = walk(nested)
                 if missing is not None:

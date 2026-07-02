@@ -2470,7 +2470,7 @@ def _validation_hash_builtin_defaults() -> dict[str, Any]:
         "ipsae_pae_cutoff": 15.0,
         "ipsae_dist_cutoff": 15.0,
         "seeds": "101",
-        "n_sample": 5,
+        "n_sample": 1,
         "n_step": 200,
         "n_cycle": 10,
         "use_msa": False,

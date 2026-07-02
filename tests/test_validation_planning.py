@@ -53,7 +53,7 @@ class ValidationPlanningTest(unittest.TestCase):
                 model_name="protenix-v2",
                 top_k=2,
                 min_esm_iptm=0.6,
-                n_sample=1,
+                n_sample=2,
             ).validation_config_hash,
         )
         self.assertNotEqual(

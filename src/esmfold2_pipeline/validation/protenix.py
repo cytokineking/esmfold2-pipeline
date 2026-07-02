@@ -58,7 +58,7 @@ class ProtenixRunnerConfig:
     scratch_root: Path | None = None
     keep_debug: bool = False
     seeds: tuple[int, ...] = DEFAULT_PROTENIX_SEEDS
-    n_sample: int = 5
+    n_sample: int = 1
     n_step: int = 200
     n_cycle: int = 10
     use_msa: bool = False
@@ -1477,6 +1477,10 @@ def _run_ipsae_adapter(
     script_path = _resolve_ipsae_script(config)
     if script_path is None:
         return {"error": "ipSAE adapter script not found"}
+    script_path = script_path.expanduser().resolve()
+    summary_path = summary_path.expanduser().resolve()
+    full_data_path = full_data_path.expanduser().resolve()
+    cif_path = cif_path.expanduser().resolve()
     try:
         adapter_dir = cif_path.parent / "_ipsae_adapter"
         adapted_full_path, _adapted_summary_path = _write_ipsae_adapter_files(
@@ -1741,7 +1745,10 @@ def _validation_metrics_from_summary(
     if ipsae_details:
         metrics.update(ipsae_details)
     if ipsae is None:
-        fail_reasons.append("missing scoped binder-target validation_ipSAE")
+        missing_ipsae_reason = "missing scoped binder-target validation_ipSAE"
+        metrics["validation_ipSAE_warning"] = missing_ipsae_reason
+        if min_validation_ipsae is not None:
+            fail_reasons.append(missing_ipsae_reason)
     else:
         adapter_metrics = ipsae.get("adapter_metrics")
         if isinstance(adapter_metrics, dict):
