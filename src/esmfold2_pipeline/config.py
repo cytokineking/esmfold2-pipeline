@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 from pathlib import Path
 import re
@@ -53,11 +53,11 @@ DEFAULT_MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPE = "auto"
 DEFAULT_TARGET_GEOMETRY_DRIFT_WEIGHT = 2.5
 DEFAULT_TARGET_GEOMETRY_DRIFT_TOLERANCE_ANGSTROM = 0.1
 DEFAULT_TARGET_GEOMETRY_DRIFT_STIFFNESS_ANGSTROM = 0.1
-DEFAULT_ANALYSIS_TOP_K = 25
+DEFAULT_ANALYSIS_TOP_K = 100
 HOTSPOT_LOSS_MODES = {"entropy_hotspot", "probability_hinge"}
 BINDER_TARGET_CONTACT_MODES = {"legacy", "mosaic_cdr"}
 MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPES = {"auto", "hotspot", "target_all"}
-DEFAULT_MINIPROTEIN_LENGTH_RANGE = (60, 200)
+DEFAULT_MINIPROTEIN_LENGTH_RANGE = (65, 150)
 MINIPROTEIN_SCAFFOLD = "miniprotein"
 SCFV_SCAFFOLD = "scfv"
 VHH_SCAFFOLD = "vhh"
@@ -466,6 +466,8 @@ def load_campaign_config(
     target_sequence = _parse_target_sequence(target.get("sequence"))
     if target_structure is not None and target_sequence is not None:
         raise ValueError("target.structure and target.sequence are mutually exclusive")
+    if target_structure is not None:
+        target_structure = _resolve_conditioning_assembly_auto(target_structure)
     if target_structure is None:
         _reject_structure_only_target_fields(target)
     target_name = _optional_str(target, "name")
@@ -494,7 +496,7 @@ def load_campaign_config(
     if len(critics) != 1:
         raise ValueError("single-worker campaign runner currently supports exactly one critic")
 
-    steps = int(campaign.get("steps", 2))
+    steps = int(campaign.get("steps", 150))
     if steps <= 0:
         raise ValueError("campaign.steps must be positive")
 
@@ -554,7 +556,7 @@ def load_campaign_config(
     binder_target_contact_mode = _parse_choice(
         loss.get(
             "binder_target_contact_mode",
-            DEFAULT_BINDER_TARGET_CONTACT_MODE,
+            _default_binder_target_contact_mode(binder_config.scaffold),
         ),
         "loss.binder_target_contact_mode",
         BINDER_TARGET_CONTACT_MODES,
@@ -732,11 +734,10 @@ def _parse_antibody_frameworks(
     frameworks: Any,
 ) -> tuple[AntibodyFrameworkSpec, ...]:
     if framework is None and frameworks is None:
-        raise ValueError(
-            "binder.framework or binder.frameworks is required when "
-            f"binder.scaffold is {scaffold}"
-        )
+        frameworks = "all"
     if frameworks is not None:
+        if isinstance(frameworks, str) and frameworks.strip().lower() == "all":
+            frameworks = list(_all_framework_names(scaffold))
         if not isinstance(frameworks, list) or not frameworks:
             raise ValueError("binder.frameworks must be a non-empty list")
         parsed = tuple(
@@ -752,6 +753,20 @@ def _parse_antibody_frameworks(
         joined = ", ".join(duplicates)
         raise ValueError(f"binder.frameworks contains duplicate framework names: {joined}")
     return parsed
+
+
+def _default_binder_target_contact_mode(scaffold: str) -> str:
+    if scaffold in {SCFV_SCAFFOLD, VHH_SCAFFOLD}:
+        return "mosaic_cdr"
+    return DEFAULT_BINDER_TARGET_CONTACT_MODE
+
+
+def _all_framework_names(scaffold: str) -> tuple[str, ...]:
+    if scaffold == SCFV_SCAFFOLD:
+        return all_scfv_framework_names()
+    if scaffold == VHH_SCAFFOLD:
+        return all_vhh_framework_names()
+    return ()
 
 
 def _parse_antibody_framework_spec(
@@ -1283,12 +1298,14 @@ def _parse_target_structure(
         "target.conditioning.mode",
         {"none", "distogram"},
     )
-    conditioning_assembly = conditioning.get(
-        "assembly",
-        conditioning_mode == "distogram" and len(chains) > 1,
-    )
+    raw_conditioning_assembly = conditioning.get("assembly", "auto")
+    conditioning_assembly_auto = raw_conditioning_assembly in (None, "auto")
+    if conditioning_assembly_auto:
+        conditioning_assembly = False
+    else:
+        conditioning_assembly = raw_conditioning_assembly
     if not isinstance(conditioning_assembly, bool):
-        raise ValueError("target.conditioning.assembly must be true or false")
+        raise ValueError("target.conditioning.assembly must be true, false, or auto")
     if conditioning_assembly and conditioning_mode != "distogram":
         raise ValueError(
             "target.conditioning.assembly requires target.conditioning.mode: distogram"
@@ -1325,10 +1342,30 @@ def _parse_target_structure(
         ),
         conditioning_mode=conditioning_mode,
         conditioning_assembly=conditioning_assembly,
+        conditioning_assembly_auto=conditioning_assembly_auto,
         conditioning_chain_pairs=conditioning_chain_pairs,
         partial_conditioning=partial_conditioning,
         representative_atom=representative_atom,
         require_resolved=require_resolved,
+    )
+
+
+def _resolve_conditioning_assembly_auto(
+    target_structure: StructureTargetConfig,
+) -> StructureTargetConfig:
+    if not target_structure.conditioning_assembly_auto:
+        return target_structure
+    if target_structure.conditioning_mode != "distogram":
+        return replace(
+            target_structure,
+            conditioning_assembly=False,
+            conditioning_assembly_auto=False,
+        )
+    prepared_target = parse_structure_target(target_structure)
+    return replace(
+        target_structure,
+        conditioning_assembly=len(prepared_target.chains) > 1,
+        conditioning_assembly_auto=False,
     )
 
 

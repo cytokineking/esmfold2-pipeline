@@ -33,8 +33,6 @@ from esmfold2_pipeline.execution import (
     run_one_gpu_smoke_shard,
     run_one_mock_shard,
 )
-
-_LOCAL_RUNTIME_CACHE_DISABLE_ENV = "ESMFOLD2_PIPELINE_DISABLE_LOCAL_RUNTIME_CACHE"
 from esmfold2_pipeline.frameworks import (
     all_scfv_framework_names,
     all_vhh_framework_names,
@@ -75,6 +73,11 @@ from esmfold2_pipeline.validation import (
 from esmfold2_pipeline.validation.workers import (
     _normalize_gpu_ids as _normalize_validation_gpu_ids,
 )
+
+
+_LOCAL_RUNTIME_CACHE_DISABLE_ENV = "ESMFOLD2_PIPELINE_DISABLE_LOCAL_RUNTIME_CACHE"
+DEFAULT_MIN_IPTM = 0.6
+DEFAULT_MAX_DESIGNS = 100
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -362,14 +365,17 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument(
         "--max-designs",
         type=int,
-        default=50,
+        default=DEFAULT_MAX_DESIGNS,
         help="maximum ranked designs to select after launch",
     )
     launch.add_argument(
         "--min-iptm",
         type=float,
         default=None,
-        help="drop designs below this ESMFold2 ipTM during launch selection",
+        help=(
+            "drop designs below this ESMFold2 ipTM during launch selection and "
+            "Protenix validation; default 0.6, set 0 to disable"
+        ),
     )
     launch.add_argument(
         "--require-hotspot-contact",
@@ -596,8 +602,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="rank completed designs and write esmfold2/selected_designs.csv",
     )
     select.add_argument("campaign_dir", type=Path)
-    select.add_argument("--max-designs", type=int, default=50)
-    select.add_argument("--min-iptm", type=float, default=None)
+    select.add_argument("--max-designs", type=int, default=DEFAULT_MAX_DESIGNS)
+    select.add_argument(
+        "--min-iptm",
+        type=float,
+        default=None,
+        help="drop designs below this ipTM; default 0.6, set 0 to disable",
+    )
     select.add_argument(
         "--require-hotspot-contact",
         choices=("auto", "always", "never"),
@@ -1400,7 +1411,7 @@ def _run_launch_final_steps(campaign_dir: Path, args: argparse.Namespace) -> int
         select = select_campaign(
             campaign_dir,
             max_designs=_launch_max_designs(args),
-            min_iptm=getattr(args, "min_iptm", None),
+            min_iptm=_effective_min_iptm(args),
             require_hotspot_contact=_launch_require_hotspot_contact(args),
         )
         print(f"ranked_csv: {select.ranked_csv}")
@@ -1458,11 +1469,16 @@ def _is_campaign_dir(path: Path) -> bool:
 
 
 def _launch_max_designs(args: argparse.Namespace) -> int:
-    return int(getattr(args, "max_designs", 50))
+    return int(getattr(args, "max_designs", DEFAULT_MAX_DESIGNS))
 
 
 def _launch_require_hotspot_contact(args: argparse.Namespace) -> str:
     return getattr(args, "require_hotspot_contact", None) or "auto"
+
+
+def _effective_min_iptm(args: argparse.Namespace) -> float:
+    value = getattr(args, "min_iptm", None)
+    return DEFAULT_MIN_IPTM if value is None else float(value)
 
 
 def _launch_should_run_validation(
@@ -1497,7 +1513,7 @@ def _launch_validation_args(
             "analysis_top_k": getattr(args, "analysis_top_k", None),
             "validate_model": None,
             "validation_batch_size": None,
-            "min_validation_iptm": None,
+            "min_validation_iptm": getattr(args, "min_iptm", None),
             "min_validation_ipsae": None,
             "ipsae_script": None,
             "ipsae_python": None,
@@ -1739,8 +1755,6 @@ def _generated_launch_errors(args: argparse.Namespace) -> list[str]:
                 "--mosaic-framework-contact-penalty-weight must be non-negative"
             )
     if scaffold in {"scfv", "vhh"}:
-        if args.frameworks is None:
-            errors.append(f"--frameworks is required when --scaffold {scaffold}")
         if args.length is not None:
             errors.append("--length is only valid when --scaffold miniprotein")
     elif args.frameworks is not None:
@@ -1760,7 +1774,7 @@ def _generated_launch_config(args: argparse.Namespace) -> dict:
         binder["length"] = args.length
     if scaffold in {"scfv", "vhh"}:
         binder["frameworks"] = _resolve_cli_frameworks(
-            args.frameworks or [],
+            args.frameworks or ["all"],
             scaffold=scaffold,
         )
 
@@ -2154,7 +2168,7 @@ def _select(args: argparse.Namespace) -> int:
     result = select_campaign(
         args.campaign_dir,
         max_designs=args.max_designs,
-        min_iptm=args.min_iptm,
+        min_iptm=_effective_min_iptm(args),
         require_hotspot_contact=args.require_hotspot_contact,
     )
     print(f"ranked_csv: {result.ranked_csv}")
@@ -2606,8 +2620,8 @@ def _with_validation_yaml_defaults(
 def _validation_builtin_defaults(*, mode: str) -> dict[str, Any]:
     values: dict[str, Any] = {
         "validate_model": DEFAULT_VALIDATE_MODEL,
-        "min_esm_iptm": None,
-        "min_validation_iptm": None,
+        "min_esm_iptm": DEFAULT_MIN_IPTM,
+        "min_validation_iptm": DEFAULT_MIN_IPTM,
         "min_validation_ipsae": None,
         "require_hotspot_contact": "auto",
         "max_attempts": 3,
@@ -2643,7 +2657,7 @@ def _validation_hash_builtin_defaults() -> dict[str, Any]:
         "n_sample": 1,
         "n_step": 200,
         "n_cycle": 10,
-        "use_msa": False,
+        "use_msa": None,
         "use_template": "auto",
         "target_msa_mode": None,
         "binder_msa_mode": "auto",
@@ -2800,7 +2814,25 @@ def _validation_defaults_from_mapping(
         ("heartbeat_interval", "heartbeat_interval_seconds"),
     )
     _set_first_int(defaults, runtime, "token_limit", ("token_limit",))
+    if "use_msa" not in defaults and _runtime_implies_use_msa(runtime):
+        defaults["use_msa"] = True
     return defaults
+
+
+def _runtime_implies_use_msa(runtime: dict[str, Any]) -> bool:
+    target_msa_mode = runtime.get("target_msa_mode", runtime.get("target"))
+    if target_msa_mode in {"provided", "server"}:
+        return True
+    return any(
+        runtime.get(key) is not None
+        for key in (
+            "msa_server",
+            "msa_server_url",
+            "server_url",
+            "target_msa_dir",
+            "target_msa_map_csv",
+        )
+    )
 
 
 def _validation_yaml_mapping(campaign_dir: Path) -> dict[str, Any]:
@@ -3013,6 +3045,7 @@ def _coerce_seeds(value: Any, field_name: str) -> str:
 
 def _protenix_runner_config_from_args(args: argparse.Namespace) -> ProtenixRunnerConfig:
     target_msa_mode = _target_msa_mode_from_args(args)
+    use_msa = _effective_validation_use_msa(args, target_msa_mode=target_msa_mode)
     return ProtenixRunnerConfig(
         model_name=args.validate_model,
         protenix_command=_protenix_command_from_args(args),
@@ -3024,7 +3057,7 @@ def _protenix_runner_config_from_args(args: argparse.Namespace) -> ProtenixRunne
         n_sample=args.n_sample,
         n_step=args.n_step,
         n_cycle=args.n_cycle,
-        use_msa=args.use_msa,
+        use_msa=use_msa,
         use_template=args.use_template,
         target_msa_mode=target_msa_mode,
         binder_msa_mode=args.binder_msa_mode,
@@ -3052,6 +3085,7 @@ def _protenix_runner_config_from_args(args: argparse.Namespace) -> ProtenixRunne
 
 def _validation_plan_config_from_args(args: argparse.Namespace) -> ValidationPlanConfig:
     target_msa_mode = _target_msa_mode_from_args(args)
+    use_msa = _effective_validation_use_msa(args, target_msa_mode=target_msa_mode)
     protenix_command = _protenix_command_from_args(args)
     return ValidationPlanConfig(
         model_name=args.validate_model,
@@ -3070,7 +3104,7 @@ def _validation_plan_config_from_args(args: argparse.Namespace) -> ValidationPla
         n_step=args.n_step,
         n_cycle=args.n_cycle,
         token_limit=args.token_limit,
-        use_msa=args.use_msa,
+        use_msa=use_msa,
         use_template=args.use_template,
         target_msa_mode=target_msa_mode,
         binder_msa_mode=args.binder_msa_mode,
@@ -3143,7 +3177,10 @@ def _validation_worker_args(args: argparse.Namespace) -> list[str]:
         worker_args.append("--keep-validation-debug")
     if args.no_validation_preflight:
         worker_args.append("--no-validation-preflight")
-    if args.use_msa:
+    if _effective_validation_use_msa(
+        args,
+        target_msa_mode=_target_msa_mode_from_args(args),
+    ):
         worker_args.append("--use-msa")
     if args.use_template != "auto":
         worker_args.extend(["--use-template", args.use_template])
@@ -3237,7 +3274,10 @@ def _validation_prefetch_config_from_args(args: argparse.Namespace) -> dict[str,
     config: dict[str, Any] = {
         "min_esm_iptm": args.min_esm_iptm,
         "require_hotspot_contact": args.require_hotspot_contact,
-        "use_msa": args.use_msa,
+        "use_msa": _effective_validation_use_msa(
+            args,
+            target_msa_mode=target_msa_mode,
+        ),
         "use_template": args.use_template,
         "target_msa_mode": target_msa_mode,
         "binder_msa_mode": args.binder_msa_mode,
@@ -3291,6 +3331,17 @@ def _target_msa_mode_from_args(args: argparse.Namespace) -> str:
                 "provided/server, or no explicit mode"
             )
     return mode
+
+
+def _effective_validation_use_msa(
+    args: argparse.Namespace,
+    *,
+    target_msa_mode: str,
+) -> bool:
+    use_msa = getattr(args, "use_msa", None)
+    if use_msa is not None:
+        return bool(use_msa)
+    return target_msa_mode != "none"
 
 
 def _protenix_command_from_args(args: argparse.Namespace) -> tuple[str, ...] | None:

@@ -36,6 +36,15 @@ still being produced. Use `--validation-msa-workers 0` to disable this, or set a
 larger worker count while keeping the shared default
 `--msa-max-requests-per-minute 5` server throttle.
 
+By default, validation planning requires ESMFold2 binder-target ipTM >= 0.6 and
+Protenix validation requires binder-target ipTM >= 0.6. This lenient floor keeps
+obviously weak designs out of expensive validation and final pass sets. Set
+`--min-iptm 0` during `launch`, or set `--min-esm-iptm 0` and
+`--min-validation-iptm 0` in the validation CLI/YAML, to disable the floor.
+
+Target MSA server or provided-MSA settings infer `use_msa: true` when
+`use_msa` is omitted. Explicit `use_msa: false` remains an opt-out.
+
 ## Cold starts and retries
 
 On a fresh machine, the first validation run can be much slower than later

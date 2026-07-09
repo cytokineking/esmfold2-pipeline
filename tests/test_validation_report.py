@@ -11,6 +11,7 @@ from esmfold2_pipeline.execution.mock_worker import (
     plan_one_mock_shard,
     run_one_mock_shard,
 )
+from esmfold2_pipeline.reports import exports as exports_module
 from esmfold2_pipeline.reports import analyze_campaign, report_validation
 from esmfold2_pipeline.validation import (
     MOCK_VALIDATION_MODEL,
@@ -221,6 +222,40 @@ class ValidationReportTest(unittest.TestCase):
                     for warning in summary["warnings"]
                 )
             )
+
+    def test_analyze_campaign_defaults_top_k_to_100_without_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            campaign_dir = Path(tmpdir)
+            plan_one_mock_shard(campaign_dir)
+            run_one_mock_shard(campaign_dir)
+            plan_validation_tasks(
+                campaign_dir,
+                config=ValidationPlanConfig(model_name=MOCK_VALIDATION_MODEL),
+            )
+            run_mock_validation(campaign_dir)
+
+            result = analyze_campaign(campaign_dir)
+
+            summary = json.loads(result.summary_json.read_text())
+            self.assertEqual(summary["counts"]["top_k"], 100)
+            self.assertEqual(result.copied_designs, 1)
+
+    def test_rmsd_colored_plots_use_fixed_complete_miss_color_cap(self) -> None:
+        values = [0.0, 5.0, 55.5]
+
+        vmax = exports_module._colorbar_max_for_field(
+            "binder_ca_rmsd_after_target_alignment",
+            values,
+        )
+
+        self.assertEqual(vmax, 20.0)
+        self.assertTrue(
+            exports_module._colorbar_uses_overflow_label(
+                "binder_ca_rmsd_after_target_alignment",
+                values,
+                vmax,
+            )
+        )
 
 
 if __name__ == "__main__":

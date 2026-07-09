@@ -108,6 +108,7 @@ class StructureTargetConfig:
     hotspots: dict[str, tuple[str, ...]] | None = None
     conditioning_mode: str = "none"
     conditioning_assembly: bool = False
+    conditioning_assembly_auto: bool = False
     conditioning_chain_pairs: tuple[tuple[str, str], ...] | None = None
     partial_conditioning: bool = True
     representative_atom: str = "esmfold2_default"

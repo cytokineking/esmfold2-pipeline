@@ -91,13 +91,8 @@ Hotspots have two roles:
 
 ### Mosaic CDR contact mode for scFv and VHH
 
-For antibody scaffolds, the default `legacy` contact mode keeps the original
-whole-binder target attraction and can add the usual hotspot loss on top. This
-means framework residues can still help satisfy the baseline binder-target
-attraction.
-
-Use `loss.binder_target_contact_mode: mosaic_cdr` when you want Mosaic-style
-CDR-driven binding for scFv or VHH campaigns. In this mode, the original
+For antibody scaffolds, the default contact mode is now `mosaic_cdr`, which
+drives scFv and VHH binding through CDR residues. In this mode, the original
 whole-binder target attraction is replaced by a CDR-to-target entropy contact
 loss:
 
@@ -105,6 +100,10 @@ loss:
   residue.
 - with `target.hotspots`: CDRs are encouraged to contact the hotspot residues.
 - framework residues are not part of the attractive contact term.
+
+Set `loss.binder_target_contact_mode: legacy` only when you explicitly want the
+original whole-binder target attraction, where framework residues can help
+satisfy the baseline binder-target contact term.
 
 The legacy design-time hotspot loss is not added on top of this mode. Hotspots
 instead define the target-side mask for the Mosaic CDR attraction, while the
@@ -122,7 +121,7 @@ target:
   hotspots: "C:1-10"
   conditioning:
     mode: distogram
-    assembly: true
+    assembly: auto
 
 binder:
   scaffold: vhh
@@ -152,10 +151,11 @@ numbering disagree.
 
 Structure-target conditioning uses the shared ESMFold2 fold wrapper, so it
 applies to miniprotein, scFv, and VHH campaigns. Same-chain target distograms
-can condition each selected target chain, and `conditioning.assembly: true`
-additionally conditions selected target-target chain-pair blocks in both the
-design and critic folds. Target-binder geometry is left for the model to
-predict.
+can condition each selected target chain, and the default
+`conditioning.assembly: auto` additionally conditions selected target-target
+chain-pair blocks for multichain targets in both the design and critic folds.
+Set `conditioning.assembly: false` to opt out. Target-binder geometry is left
+for the model to predict.
 
 Conditioning injects the raw target distances as model pair features before the
 folding trunk, and is used for both design folds and critic re-evaluation. If

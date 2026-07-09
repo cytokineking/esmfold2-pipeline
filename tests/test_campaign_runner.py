@@ -13,6 +13,10 @@ from esmfold2_pipeline.config import check_campaign_config, load_campaign_config
 from esmfold2_pipeline.db import CampaignStore, connect_database
 from esmfold2_pipeline.esm_adapter import DesignCandidateArtifact
 from esmfold2_pipeline.execution import run_campaign
+from esmfold2_pipeline.frameworks import (
+    all_scfv_framework_names,
+    all_vhh_framework_names,
+)
 from esmfold2_pipeline.planning import plan_campaign
 from esmfold2_pipeline.reports import inspect_campaign
 
@@ -315,6 +319,73 @@ output: {root / "campaign"}
             self.assertEqual(config.target_geometry_drift.tolerance_angstrom, 0.1)
             self.assertEqual(config.target_geometry_drift.stiffness_angstrom, 0.1)
             self.assertIsNone(config.target_geometry_drift.regions)
+
+    def test_config_defaults_to_production_steps_and_analysis_top_k(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                f"""
+target:
+  name: ctla4
+binder:
+  scaffold: miniprotein
+campaign:
+  num_designs: 1
+output: {root / "campaign"}
+""".lstrip()
+            )
+
+            config = load_campaign_config(config_path)
+
+            self.assertEqual(config.steps, 150)
+            self.assertEqual(config.analysis.top_k, 100)
+            self.assertEqual(config.binder.length_range, (65, 150))
+
+    def test_antibody_defaults_use_all_frameworks_and_mosaic_cdr(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                f"""
+target:
+  name: ctla4
+binder:
+  scaffold: vhh
+campaign:
+  num_designs: 1
+  steps: 1
+output: {root / "campaign"}
+""".lstrip()
+            )
+
+            config = load_campaign_config(config_path)
+
+            self.assertEqual(config.binder.framework_names, all_vhh_framework_names())
+            self.assertEqual(config.binder_target_contact_mode, "mosaic_cdr")
+
+    def test_yaml_frameworks_all_expands_to_bundled_panel(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                f"""
+target:
+  name: ctla4
+binder:
+  scaffold: scfv
+  frameworks: all
+campaign:
+  num_designs: 1
+  steps: 1
+output: {root / "campaign"}
+""".lstrip()
+            )
+
+            config = load_campaign_config(config_path)
+
+            self.assertEqual(config.binder.framework_names, all_scfv_framework_names())
+            self.assertEqual(config.binder_target_contact_mode, "mosaic_cdr")
 
     def test_config_accepts_short_model_aliases(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1353,7 +1424,7 @@ output: {campaign_dir}
                     kwargs["target_geometry_drift"].regions,
                     {"A": ("all",)},
                 )
-                self.assertEqual(kwargs["binder_length_range"], (60, 200))
+                self.assertEqual(kwargs["binder_length_range"], (65, 150))
                 return _fake_design_artifact(**kwargs)
 
             with patch(
@@ -1443,6 +1514,34 @@ output: {campaign_dir}
             self.assertTrue(config.target_structure.conditioning_assembly)
             self.assertIsNone(config.target_structure.conditioning_chain_pairs)
             self.assertTrue(config.target_geometry_drift.enabled)
+
+    def test_omitted_chains_multichain_target_defaults_to_assembly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            target_path = root / "target.pdb"
+            _write_multichain_test_pdb(target_path)
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                f"""
+target:
+  structure: {target_path}
+binder:
+  scaffold: miniprotein
+campaign:
+  num_designs: 1
+  critics:
+    - ESMFold2-Experimental-Fast
+  steps: 1
+output: {root / "campaign"}
+""".lstrip()
+            )
+
+            config = load_campaign_config(config_path)
+
+            self.assertIsNotNone(config.target_structure)
+            assert config.target_structure is not None
+            self.assertEqual(config.target_structure.chains, ())
+            self.assertTrue(config.target_structure.conditioning_assembly)
 
     def test_structure_conditioning_and_geometry_drift_can_be_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

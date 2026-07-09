@@ -39,6 +39,7 @@ from esmfold2_pipeline.artifacts import (
     write_json_atomic,
     write_text_atomic,
 )
+from esmfold2_pipeline.config import DEFAULT_ANALYSIS_TOP_K
 from esmfold2_pipeline.db import connect_database
 from esmfold2_pipeline.planning import binder_code
 from esmfold2_pipeline.reports.status import inspect_campaign
@@ -49,6 +50,7 @@ SUMMARY_JSON = ESMFOLD2_SUMMARY_JSON
 SELECTED_MANIFEST_CSV = ESMFOLD2_SELECTED_MANIFEST_CSV
 VALIDATION_MANIFEST_CSV = VALIDATION_RESULTS_CSV
 VALIDATION_STRUCTURES_MANIFEST_CSV = VALIDATION_STRUCTURE_SAMPLES_CSV
+RMSD_COLORBAR_MAX_ANGSTROM = 20.0
 
 HOTSPOT_FIELDS = [
     "hotspot_pass",
@@ -343,7 +345,7 @@ def aggregate_campaign(campaign_dir: str | Path) -> AggregateResult:
 def select_campaign(
     campaign_dir: str | Path,
     *,
-    max_designs: int = 50,
+    max_designs: int = 100,
     min_iptm: float | None = None,
     require_hotspot_contact: Literal["auto", "always", "never"] = "auto",
 ) -> SelectResult:
@@ -684,7 +686,7 @@ def _analysis_top_k(root: Path) -> int:
         parsed = _optional_int_value(value)
         if parsed is not None and parsed > 0:
             return parsed
-    return 25
+    return DEFAULT_ANALYSIS_TOP_K
 
 
 def _combined_ranking_sort_key(row: dict[str, Any]) -> tuple[int, int, float, float, float, float, int, str]:
@@ -888,22 +890,22 @@ def _scatter_plot(
     figure, axis = plt.subplots(figsize=(8.4, 6.4))
     axis.grid(True, color="#e4e4e4", linewidth=0.8, zorder=0)
     if has_color:
-        # Clip the colour scale at the 95th percentile so a single high-RMSD
-        # outlier cannot wash out the contrast among the good (low-RMSD) designs.
+        # RMSDs above this cap are all complete pose misses for plot triage.
         # viridis_r maps low RMSD -> yellow, high RMSD -> dark.
         color_values = np.array(colors, dtype=float)
-        vmax = float(np.percentile(color_values, 95))
-        if not vmax > 0:
-            vmax = float(color_values.max()) or 1.0
+        vmax = _colorbar_max_for_field(color_field, color_values)
         scatter = axis.scatter(
             xs, ys, c=np.clip(color_values, 0.0, vmax), cmap="viridis_r",
             vmin=0.0, vmax=vmax, s=78, edgecolor="none", alpha=0.95, zorder=3,
         )
         colorbar = figure.colorbar(scatter, ax=axis, pad=0.02)
         colorbar.set_label(color_label or color_field, fontsize=12)
-        if float(color_values.max()) > vmax + 1e-9:
+        if color_field == "binder_ca_rmsd_after_target_alignment":
+            colorbar.set_ticks([0.0, 5.0, 10.0, 15.0, RMSD_COLORBAR_MAX_ANGSTROM])
+            colorbar.set_ticklabels(["0", "5", "10", "15", ""])
+        if _colorbar_uses_overflow_label(color_field, color_values, vmax):
             colorbar.ax.text(
-                0.5, 1.015, f">={vmax:.1f}", transform=colorbar.ax.transAxes,
+                0.5, 1.015, f">={vmax:g}", transform=colorbar.ax.transAxes,
                 ha="center", va="bottom", fontsize=9,
             )
     else:
@@ -932,6 +934,23 @@ def _scatter_plot(
     figure.savefig(path, dpi=200, facecolor="white")
     plt.close(figure)
     return [path], []
+
+
+def _colorbar_max_for_field(color_field: str, color_values: Any) -> float:
+    if color_field == "binder_ca_rmsd_after_target_alignment":
+        return RMSD_COLORBAR_MAX_ANGSTROM
+    vmax = float(color_values.max()) or 1.0
+    return vmax if vmax > 0 else 1.0
+
+
+def _colorbar_uses_overflow_label(
+    color_field: str,
+    color_values: Any,
+    vmax: float,
+) -> bool:
+    if color_field == "binder_ca_rmsd_after_target_alignment":
+        return True
+    return float(color_values.max()) > vmax + 1e-9
 
 
 def _analysis_summary(

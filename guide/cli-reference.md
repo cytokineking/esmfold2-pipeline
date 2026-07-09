@@ -170,31 +170,31 @@ generated config before running).
 | `--target-structure PATH` | one target source | — | PDB/mmCIF target structure. |
 | `--num-designs N` | yes | — | Total number of designs. |
 | `--scaffold miniprotein\|scfv\|vhh` | no | `miniprotein` | Binder scaffold. |
-| `--frameworks NAME[,NAME] \| all` | scFv/VHH | — | Bundled framework(s) for the antibody scaffold. |
+| `--frameworks NAME[,NAME] \| all` | no | all bundled frameworks for scFv/VHH | Bundled framework(s) for the antibody scaffold. |
 | `--target-name NAME` | yes | — | Display name for the target (required for no-YAML launch). |
 | `--chains A,C` | no | all chains | Structure-target chains to include (also `--chains A C`). |
 | `--hotspot A:88,91` | no | none | Hotspot selector; repeatable. |
-| `--binder-target-contact-mode legacy\|mosaic_cdr` | no | `legacy` | Binder-target contact loss mode. `mosaic_cdr` is scFv/VHH-only. |
+| `--binder-target-contact-mode legacy\|mosaic_cdr` | no | `legacy` for miniprotein, `mosaic_cdr` for scFv/VHH | Binder-target contact loss mode. `mosaic_cdr` is scFv/VHH-only. |
 | `--mosaic-cdr-contact-weight X` | no | `0.5` | Weight for Mosaic-style CDR contact loss. Requires `--binder-target-contact-mode mosaic_cdr`. |
 | `--mosaic-cdr-contact-cutoff-angstrom A` | no | `22.0` | Distogram cutoff for Mosaic-style CDR contact loss. Requires `mosaic_cdr`. |
 | `--mosaic-cdr-num-target-contacts N` | no | `3` | Target contacts averaged per CDR residue. Requires `mosaic_cdr`. |
 | `--mosaic-framework-contact-penalty-weight X` | no | `0.0` | Optional framework contact penalty weight. Requires `mosaic_cdr`; default is off. |
 | `--mosaic-framework-contact-penalty-scope auto\|hotspot\|target_all` | no | `auto` | Target scope for the optional framework contact penalty. Requires `mosaic_cdr`. |
-| `--length 80-140` | no | `60-200` | Miniprotein length or range. |
-| `--steps N` | no | `2` | Optimization steps (use `150` for production). |
+| `--length 65-150` | no | `65-150` | Miniprotein length or range. |
+| `--steps N` | no | `150` | Optimization steps. Use smaller values only for smoke tests. |
 | `--seed-start N` | no | `0` | First deterministic seed. |
 
 ### Selection, export, and validation flags
 
 | Command(s) | Flag | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
-| `launch`, `select` | `--max-designs N` | no | `50` | Size of the ranked shortlist (use `84` for a plate). |
-| `launch`, `select` | `--min-iptm X` | no | none | Drop designs below this ipTM. |
+| `launch`, `select` | `--max-designs N` | no | `100` | Size of the ranked shortlist. |
+| `launch`, `select` | `--min-iptm X` | no | `0.6` | Drop designs below this ipTM; set `0` to disable the floor. |
 | `launch`, `select` | `--require-hotspot-contact auto\|always\|never` | no | `auto` | Final hotspot-contact filtering. |
 | `launch` | `--skip-export` | no | off | Aggregate and select, but do not copy selected ESMFold2 structures. |
 | `launch` | `--skip-validation` | no | off | Skip Protenix validation even if the campaign config has a `validation` block. |
 | `export` | `--max-designs N` | no | all selected | Export only the top N ranked designs. |
-| `launch`, `analyze`, `validate` | `--analysis-top-k N` / `--top-k N` | no | all ranked | Copy only the top N paired structures into `ranked_results/top_ranked/` (the ranking CSV still covers all). |
+| `launch`, `analyze`, `validate` | `--analysis-top-k N` / `--top-k N` | no | `analysis.top_k` (`100`) | Copy only the top N paired structures into `ranked_results/top_ranked/` (the ranking CSV still covers all). |
 | `launch`, `validate` | `--skip-analysis` | no | off | Skip the combined validation ranking and paired structure copy. |
 | `launch` | `--validation-msa-workers N` | no | 1 if validation config present, else 0 | Background MSA workers run during `launch`. |
 | `launch`, `validate-msa-run`, `validate` | `--msa-max-requests-per-minute N` | no | `5` | Campaign-wide MSA server submit throttle. |

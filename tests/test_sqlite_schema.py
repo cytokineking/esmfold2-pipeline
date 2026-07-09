@@ -78,7 +78,7 @@ class CampaignSchemaTest(unittest.TestCase):
                     0,
                     0,
                     "target:sequence",
-                    "binder:miniprotein:length=60-200",
+                    "binder:miniprotein:length=65-150",
                     '["ESMFold2-Experimental-Fast"]',
                 ),
             )

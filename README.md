@@ -156,7 +156,7 @@ uv run esmfold2-pipeline launch \
   --target-name custom_antigen \
   --target-sequence ACDEFGHIKLMNPQRSTVWY \
   --scaffold miniprotein \
-  --num-designs 100 --length 80-140 --steps 150 --model cutoff2025 \
+  --num-designs 100 --length 65-150 --steps 150 --model cutoff2025 \
   --out runs/custom-antigen-n100 --esm-repo "$ESM_REPO" --gpus all
 ```
 
@@ -195,7 +195,7 @@ uv run esmfold2-pipeline launch \
   --target-structure /path/to/target.cif \
   --chains A --hotspot A:88,91 \
   --scaffold miniprotein \
-  --num-designs 100 --length 80-140 --steps 150 --model cutoff2025 \
+  --num-designs 100 --length 65-150 --steps 150 --model cutoff2025 \
   --out runs/il2rb-hotspot-n100 --esm-repo "$ESM_REPO" --gpus all
 ```
 
@@ -232,9 +232,9 @@ uv run esmfold2-pipeline launch \
 ```
 
 VHH reuses the antibody framework-template path and reports designed CDRs as
-heavy-chain columns. For VHH or scFv epitope targeting, use
-`--binder-target-contact-mode mosaic_cdr` to replace the legacy whole-binder
-target attraction with a CDR-scoped contact loss. Add
+heavy-chain columns. VHH and scFv campaigns default to the Mosaic-style
+`mosaic_cdr` contact mode, replacing the legacy whole-binder target attraction
+with a CDR-scoped contact loss. Add
 `--mosaic-framework-contact-penalty-weight` only when you explicitly want to
 discourage framework-mediated target contacts; `1.0` is a reasonable starting
 weight for that penalty.

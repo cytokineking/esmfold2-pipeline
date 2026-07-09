@@ -288,7 +288,7 @@ output: {campaign_dir}
             self.assertIn("ok: true", result.stdout)
             self.assertIn("target: ctla4", result.stdout)
             self.assertIn("binder_scaffold: miniprotein", result.stdout)
-            self.assertIn("binder_length: 60-200", result.stdout)
+            self.assertIn("binder_length: 65-150", result.stdout)
             self.assertIn("critic: ESMFold2-Experimental-Fast", result.stdout)
             self.assertIn("designs: 3", result.stdout)
             self.assertNotIn("seeds:", result.stdout)
@@ -987,6 +987,99 @@ output: {campaign_dir}
                 ).exists()
             )
 
+    def test_min_iptm_defaults_to_lenient_floor(self) -> None:
+        self.assertEqual(
+            cli_module._effective_min_iptm(types.SimpleNamespace(min_iptm=None)),
+            0.6,
+        )
+        self.assertEqual(
+            cli_module._effective_min_iptm(types.SimpleNamespace(min_iptm=0.0)),
+            0.0,
+        )
+
+        defaults = cli_module._validation_builtin_defaults(mode="run")
+        self.assertEqual(defaults["min_esm_iptm"], 0.6)
+        self.assertEqual(defaults["min_validation_iptm"], 0.6)
+
+    def test_launch_min_iptm_default_preserves_validation_yaml_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            campaign_dir = Path(tmpdir)
+            (campaign_dir / "config.yaml").write_text(
+                """
+validation:
+  min_validation_iptm: 0.75
+""".lstrip()
+            )
+
+            launch_args = cli_module._launch_validation_args(
+                _launch_args(min_iptm=None),
+                campaign_dir,
+            )
+            merged = cli_module._with_validation_yaml_defaults(launch_args, mode="run")
+
+            self.assertEqual(merged.min_esm_iptm, 0.6)
+            self.assertEqual(merged.min_validation_iptm, 0.75)
+
+    def test_launch_explicit_min_iptm_applies_to_esm_and_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            campaign_dir = Path(tmpdir)
+
+            launch_args = cli_module._launch_validation_args(
+                _launch_args(min_iptm=0.0),
+                campaign_dir,
+            )
+            merged = cli_module._with_validation_yaml_defaults(launch_args, mode="run")
+
+            self.assertEqual(merged.min_esm_iptm, 0.0)
+            self.assertEqual(merged.min_validation_iptm, 0.0)
+
+    def test_validation_msa_settings_imply_use_msa(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            campaign_dir = Path(tmpdir)
+            (campaign_dir / "config.yaml").write_text(
+                """
+validation:
+  msa:
+    target: server
+    server_url: https://api.colabfold.com
+""".lstrip()
+            )
+
+            launch_args = cli_module._launch_validation_args(
+                _launch_args(min_iptm=None),
+                campaign_dir,
+            )
+            merged = cli_module._with_validation_yaml_defaults(launch_args, mode="run")
+            plan_config = cli_module._validation_plan_config_from_args(merged)
+
+            self.assertTrue(merged.use_msa)
+            self.assertTrue(plan_config.use_msa)
+            self.assertEqual(plan_config.target_msa_mode, "server")
+
+    def test_explicit_false_use_msa_overrides_msa_setting_inference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            campaign_dir = Path(tmpdir)
+            (campaign_dir / "config.yaml").write_text(
+                """
+validation:
+  msa:
+    use_msa: false
+    target: server
+    server_url: https://api.colabfold.com
+""".lstrip()
+            )
+
+            launch_args = cli_module._launch_validation_args(
+                _launch_args(min_iptm=None),
+                campaign_dir,
+            )
+            merged = cli_module._with_validation_yaml_defaults(launch_args, mode="run")
+            plan_config = cli_module._validation_plan_config_from_args(merged)
+
+            self.assertFalse(merged.use_msa)
+            self.assertFalse(plan_config.use_msa)
+            self.assertEqual(plan_config.target_msa_mode, "server")
+
     def test_launch_without_yaml_generates_miniprotein_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             campaign_dir = Path(tmpdir) / "campaign"
@@ -1353,8 +1446,9 @@ output: {campaign_dir}
                 result.stdout,
             )
 
-    def test_launch_requires_frameworks_for_scfv(self) -> None:
+    def test_launch_defaults_scfv_frameworks_to_all(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
+            campaign_dir = Path(tmpdir) / "campaign"
             result = _run_cli(
                 "launch",
                 "--target-name",
@@ -1366,14 +1460,25 @@ output: {campaign_dir}
                 "--num-designs",
                 "1",
                 "--out",
-                Path(tmpdir) / "campaign",
+                campaign_dir,
+                "--max-shards",
+                "0",
             )
 
-            self.assertEqual(result.returncode, 2)
-            self.assertIn("--frameworks is required when --scaffold scfv", result.stdout)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            resolved = yaml.safe_load((campaign_dir / "resolved_config.yaml").read_text())
+            self.assertEqual(
+                resolved["binder"]["frameworks"],
+                list(all_scfv_framework_names()),
+            )
+            self.assertEqual(
+                resolved["loss"]["binder_target_contact_mode"],
+                "mosaic_cdr",
+            )
 
-    def test_launch_requires_frameworks_for_vhh(self) -> None:
+    def test_launch_defaults_vhh_frameworks_to_all(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
+            campaign_dir = Path(tmpdir) / "campaign"
             result = _run_cli(
                 "launch",
                 "--target-name",
@@ -1385,11 +1490,21 @@ output: {campaign_dir}
                 "--num-designs",
                 "1",
                 "--out",
-                Path(tmpdir) / "campaign",
+                campaign_dir,
+                "--max-shards",
+                "0",
             )
 
-            self.assertEqual(result.returncode, 2)
-            self.assertIn("--frameworks is required when --scaffold vhh", result.stdout)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            resolved = yaml.safe_load((campaign_dir / "resolved_config.yaml").read_text())
+            self.assertEqual(
+                resolved["binder"]["frameworks"],
+                list(all_vhh_framework_names()),
+            )
+            self.assertEqual(
+                resolved["loss"]["binder_target_contact_mode"],
+                "mosaic_cdr",
+            )
 
     def test_launch_rejects_length_for_vhh(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2118,7 +2233,7 @@ def _launch_args(**overrides) -> argparse.Namespace:
         "validation_msa_workers": None,
         "validation_msa_poll_interval": 0.01,
         "msa_max_requests_per_minute": 5.0,
-        "max_designs": 50,
+        "max_designs": 100,
         "min_iptm": None,
         "require_hotspot_contact": None,
         "skip_export": False,

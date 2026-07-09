@@ -51,7 +51,7 @@ output: /path/to/runs/my-campaign-n100
 | `crop` | no | none | Residue selectors to keep. List for one chain, or mapping by chain. |
 | `hotspots` | no | none | Chain-qualified residue selectors used for design steering and final hotspot gating. |
 | `conditioning.mode` | no | `distogram` for `target.structure`, otherwise `none` | One of `none`, `distogram`. Set `none` to disable structure conditioning for a structure-backed target. |
-| `conditioning.assembly` | no | `true` for explicitly multichain `distogram` targets, otherwise `false` | When true, condition selected target-target chain-pair distograms. Requires `mode: distogram`. |
+| `conditioning.assembly` | no | `auto` | `auto` enables selected target-target chain-pair distograms for multichain `distogram` targets and disables them for single-chain targets. Set `false` to opt out. |
 | `conditioning.chain_pairs` | no | `auto` | `auto` means all selected target-target pairs; otherwise list pairs such as `[[A, C]]`. |
 | `conditioning.representative_atom` | no | `esmfold2_default` | Uses CB except glycine CA, matching the current parser behavior. |
 | `conditioning.partial` | no | `true` | Advanced dense-only opt-out. Omit in normal configs; by default unresolved structural pairs are masked out of distogram conditioning. |
@@ -74,12 +74,13 @@ hotspots:
 | Field | Required | Default | Notes |
 | --- | --- | --- | --- |
 | `scaffold` | yes | none | `miniprotein`, `scfv`, or `vhh`. |
-| `length` | miniprotein only | `60-200` | Integer, range string, `[min, max]`, or `{min, max}`. |
+| `length` | miniprotein only | `65-150` | Integer, range string, `[min, max]`, or `{min, max}`. |
 | `framework` | scFv/VHH only | none | One built-in framework alias/name or one custom framework mapping. Use this for single-framework antibody campaigns. |
-| `frameworks` | scFv/VHH only | none | List of built-in aliases/names or custom framework mappings. Use this to distribute total `num_designs` round-robin across frameworks. |
+| `frameworks` | scFv/VHH only | all bundled frameworks | `all`, a list of built-in aliases/names, or custom framework mappings. Use this to distribute total `num_designs` round-robin across frameworks. |
 
-Use exactly one of `framework` or `frameworks` for scFv and VHH campaigns.
-`num_designs` is always the total candidate count. For example, three
+For scFv and VHH campaigns, omit both `framework` and `frameworks` to sweep all
+bundled frameworks. Use exactly one of `framework` or `frameworks` when you want
+to restrict the panel. `num_designs` is always the total candidate count. For example, three
 frameworks and `num_designs: 9` produces three candidates per framework by
 round-robin assignment.
 
@@ -192,7 +193,7 @@ planned for a later antibody-specific workflow.
 | `seed_start` | no | `0` | First deterministic seed. Useful when extending a campaign. |
 | `inversion_model` | no | `ESMFold2-Experimental-Cutoff2025` | Model used in the design loop. Short aliases are accepted. |
 | `critics` | no | `[ESMFold2-Experimental-Cutoff2025]` | Currently exactly one critic is supported per campaign. Short aliases are accepted. |
-| `steps` | no | `2` | Number of gradient optimization steps. Use `150` for paper-style production runs. |
+| `steps` | no | `150` | Number of gradient optimization steps. Set a smaller value only for smoke tests. |
 
 The CLI `--model` flag and YAML model fields accept these short aliases:
 
@@ -219,7 +220,7 @@ All loss fields are optional.
 | `hotspot_critic_contact_cutoff_angstrom` | `5.0` | Tight final heavy-atom contact cutoff used for hotspot pass/fail. |
 | `hotspot_num_contacts` | `1` | Number of binder contacts requested per hotspot residue in the loss. |
 | `hotspot_contact_probability_target` | `0.6` | Used by `probability_hinge`. |
-| `binder_target_contact_mode` | `legacy` | `legacy` keeps the original whole-binder target attraction. `mosaic_cdr` is scFv/VHH-only and replaces that attraction with a CDR-scoped Mosaic-style contact loss. |
+| `binder_target_contact_mode` | `legacy` for miniproteins; `mosaic_cdr` for scFv/VHH | `legacy` keeps the original whole-binder target attraction. `mosaic_cdr` is scFv/VHH-only and replaces that attraction with a CDR-scoped Mosaic-style contact loss. |
 | `mosaic_cdr_contact_weight` | `0.5` | Weight for the Mosaic-style CDR-to-target entropy contact loss. Used only with `binder_target_contact_mode: mosaic_cdr`. |
 | `mosaic_cdr_contact_cutoff_angstrom` | `22.0` | Design-time distogram cutoff for the Mosaic-style CDR contact loss. |
 | `mosaic_cdr_num_target_contacts` | `3` | Number of target contacts averaged per CDR residue in the Mosaic-style contact loss and framework penalty diagnostics. |
@@ -240,12 +241,13 @@ In `legacy` mode, `entropy_hotspot` is the recommended default when hotspots are
 supplied. It adds a hotspot-masked entropy contact objective on top of the
 original ESMFold2 structure losses.
 
-For scFv and VHH campaigns, `binder_target_contact_mode: mosaic_cdr` replaces
-the original whole-binder target attraction with a Mosaic-style entropy contact
-loss whose binder rows are restricted to CDR residues. If `target.hotspots` are
-omitted, the CDRs are encouraged to contact any target residue. If
-`target.hotspots` are configured, the CDRs are encouraged to contact those
-hotspot residues. The Mosaic CDR contact loss does not use
+For scFv and VHH campaigns, the default
+`binder_target_contact_mode: mosaic_cdr` replaces the original whole-binder
+target attraction with a Mosaic-style entropy contact loss whose binder rows are
+restricted to CDR residues. If `target.hotspots` are omitted, the CDRs are
+encouraged to contact any target residue. If `target.hotspots` are configured,
+the CDRs are encouraged to contact those hotspot residues. The Mosaic CDR
+contact loss does not use
 `hotspot_contact_probability_target`; that field only applies to the legacy
 `probability_hinge` hotspot mode.
 
@@ -341,7 +343,7 @@ validation:
   require_hotspot_contact: never
   max_attempts: 3
   msa:                       # automatic MSA fetch + cache + reuse
-    use_msa: true
+    use_msa: true            # inferred when target MSA server/paths are set
     target: server           # fetch the target MSA from the MMseqs2 server
     binder: auto             # auto | none | single_sequence
     server_url: https://api.colabfold.com
@@ -357,6 +359,10 @@ validation:
 Protenix validation covers miniprotein and VHH campaigns, plus built-in scFv
 campaigns with bundled structural framework templates. See
 [Validation](validation.md) for the full lifecycle.
+
+When `msa.use_msa` is omitted, target MSA server or provided-MSA settings infer
+`use_msa: true`. Set `use_msa: false` explicitly when you want to keep MSA use
+off despite those settings.
 
 ## Recommended defaults
 
