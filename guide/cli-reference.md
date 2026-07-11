@@ -129,7 +129,7 @@ uv run esmfold2-pipeline export /path/to/runs/my-campaign-n100
 | `validate-run CAMPAIGN_DIR` | Run pending Protenix validation tasks on one GPU. |
 | `validate-run-multi CAMPAIGN_DIR --gpus all` | Start one Protenix validation worker per GPU. |
 | `validate-report CAMPAIGN_DIR` | Write validation results and structure samples under `validation/{model}/`. |
-| `analyze CAMPAIGN_DIR` | Rank validated designs and copy top-k paired structures under `ranked_results/`. |
+| `analyze CAMPAIGN_DIR` | Recompute final evaluator-consensus ranking and copy eligible top-k paired structures under `ranked_results/`; does not rerun either model. |
 | `validate CAMPAIGN_DIR` | Thin wrapper for MSA prefetch, validation planning/running, report generation, and analysis ranking. |
 
 See [Validation](validation.md) for the full Protenix validation lifecycle.
@@ -194,7 +194,9 @@ generated config before running).
 | `launch` | `--skip-export` | no | off | Aggregate and select, but do not copy selected ESMFold2 structures. |
 | `launch` | `--skip-validation` | no | off | Skip Protenix validation even if the campaign config has a `validation` block. |
 | `export` | `--max-designs N` | no | all selected | Export only the top N ranked designs. |
-| `launch`, `analyze`, `validate` | `--analysis-top-k N` / `--top-k N` | no | `analysis.top_k` (`100`) | Copy only the top N paired structures into `ranked_results/top_ranked/` (the ranking CSV still covers all). |
+| `launch`, `analyze`, `validate` | `--analysis-top-k N` / `--top-k N` | no | `analysis.top_k` (`100`) | Copy up to N eligible paired structures into `ranked_results/top_ranked/`; the compact ranking CSV still contains every eligible design. |
+| `launch`, `analyze`, `validate` | `--analysis-max-binder-rmsd-angstrom X` / `--max-binder-rmsd-angstrom X` | no | `2.5` | Override the target-aligned binder C-alpha RMSD eligibility gate for final consensus ranking. Set YAML `analysis.ranking.max_binder_rmsd_angstrom: null` to disable the gate. |
+| `launch`, `analyze`, `validate` | `--analysis-rmsd-weight X` / `--rmsd-weight X` | no | `0.10` | RMSD agreement share of the final score; set `0` for gate-only behavior. |
 | `launch`, `validate` | `--skip-analysis` | no | off | Skip the combined validation ranking and paired structure copy. |
 | `launch` | `--validation-msa-workers N` | no | 1 if validation config present, else 0 | Background MSA workers run during `launch`. |
 | `launch`, `validate-msa-run`, `validate` | `--msa-max-requests-per-minute N` | no | `5` | Campaign-wide MSA server submit throttle. |

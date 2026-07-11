@@ -15,6 +15,7 @@ the field-level reference.
 | `campaign` | yes | Number of designs, model names, and steps. |
 | `output` | yes | Campaign directory. Can be overridden with `--out` on `check`, `plan`, or `launch CONFIG`. |
 | `loss` | no | Hotspot, contact-mode, and target-geometry loss settings. Defaults are shown below. |
+| `analysis` | no | Final consensus ranking, RMSD gate, and top-k paired structure settings. |
 | `validation` | no | Optional Protenix validation and automatic MSA settings. See [the validation section](#validation) and [Validation](validation.md). |
 
 Minimal direct-sequence example:
@@ -323,6 +324,61 @@ When target geometry drift is enabled, final CSV metadata rows include
 Candidate rows stay compact and add only
 `target_geometry_drift_distance_rmse` and
 `target_geometry_drift_aligned_rmsd`, computed over the configured drift region.
+
+## `analysis`
+
+Optional final-ranking and paired-structure export settings:
+
+```yaml
+analysis:
+  top_k: 100
+  ranking:
+    mode: auto
+    max_binder_rmsd_angstrom: 2.5
+    rmsd_weight: 0.10
+```
+
+Without a structural evaluator, ESMFold2 selection remains ranked by scoped
+ESMFold2 ipTM. When Protenix or another evaluator is present, `mode: auto`
+uses consensus ranking. Evaluator confidence is the geometric mean of scoped
+validator ipTM and ipSAE, and confidence gives equal total weight to ESMFold2
+and the evaluator:
+
+```text
+confidence_score =
+    esmfold2_iptm^0.50
+  * validator_iptm^0.25
+  * validator_ipsae^0.25
+```
+
+If ipSAE is unavailable and was not required as a validation gate, scoped
+validator ipTM is used as the evaluator score. RMSD contributes a bounded
+agreement score, with `rmsd_weight: 0.10` giving agreement 10% of the final
+score. Set `rmsd_weight: 0` for gate-only behavior.
+
+The complete default calculation is:
+
+```text
+evaluator_score = sqrt(validator_iptm * validator_ipsae)
+agreement_score = exp(-0.5 * (binder_rmsd / agreement_scale)^2)
+final_score = confidence_score^(1-rmsd_weight)
+            * agreement_score^rmsd_weight
+```
+
+`agreement_scale` is `max_binder_rmsd_angstrom` when the gate is enabled and
+defaults to `2.5` when the gate is disabled. The default `rmsd_weight: 0.10`
+therefore yields `confidence_score^0.90 * agreement_score^0.10`.
+
+The target-aligned binder C-alpha RMSD gate defaults to `2.5` angstrom. Set a
+different positive value to tune it, or `null` to disable the hard gate.
+`ranked_results/combined_ranking.csv` contains only eligible designs. Designs
+that fail the gate or validation remain in `ranking_diagnostics.csv` with an
+exclusion reason and are not copied into `ranked_results/top_ranked/`.
+
+With the default nonzero RMSD weight, a valid RMSD is still required even when
+the hard gate is `null`. Set both `max_binder_rmsd_angstrom: null` and
+`rmsd_weight: 0` to make RMSD optional. `pareto_front` is reported as an
+ESMFold2/evaluator confidence diagnostic and does not override `final_score`.
 
 ## `validation`
 

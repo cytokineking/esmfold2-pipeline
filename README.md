@@ -28,6 +28,7 @@ flowchart LR
 - [Quickstart](#quickstart)
 - [Design modalities](#design-modalities)
 - [Results](#results)
+- [Ranking](#ranking)
 - [Output at a glance](#output-at-a-glance)
 - [Documentation](#documentation)
 - [Current limitations](#current-limitations)
@@ -74,6 +75,9 @@ pipeline adds:
 - **Automatic MSA handling & reuse.** Validation prefetches, caches, and reuses
   target and binder MSAs across designs and resumes — rate-limited so you never
   hammer the MSA server.
+- **Evaluator-aware consensus ranking.** Preserve ESMFold2 selection provenance,
+  then combine ESMFold2 and scoped validator confidence with a configurable
+  target-aligned binder RMSD gate and agreement contribution.
 - **Clinical antibody framework panels.** Structurally-backed scFv (clinical mAb)
   and VHH panels, ready to sweep many frameworks in a single campaign.
 - **Parallel, resumable campaigns on your own hardware.** Run hundreds to
@@ -94,9 +98,10 @@ Every campaign runs the four stages in the diagram above:
    [Protenix](guide/validation.md) for an orthogonal structural opinion (ipTM,
    ipSAE, and RMSD against the ESMFold2 model), with MSAs fetched and reused
    automatically.
-4. **Rank & select** — designs are deduplicated, ranked, and exported as a clean
-   shortlist (for example, 84 designs for a 96-well plate) with structures and
-   metrics tables ready for analysis.
+4. **Rank & select** — without a validator, designs retain their ESMFold2 ipTM
+   rank. With Protenix, final ranking combines ESMFold2 ipTM, scoped Protenix
+   ipTM/ipSAE, and target-aligned binder RMSD, then exports paired structures as
+   a clean shortlist.
 
 Campaigns run **in parallel across your GPUs — all of them by default, or a
 subset you choose with `--gpus` — and are fully resumable**: rerun the same
@@ -249,16 +254,74 @@ with the peptide set as the design hotspot (100 designs each, `fast-cutoff2025`)
 by binder Cα RMSD between the two predicted complexes** (after aligning on the
 MHC).
 
-When both models are confident (top-right), they predict the *same* complex —
-low RMSD (bright) — whereas low-confidence designs disagree (dark) and are mostly
-rejected by validation (red rings). So agreement between an in-house design model
-and an independent structure predictor is a strong hit-selection signal that
-neither score gives on its own.
+Confidence from both models is strongest evidence when it is coupled to low
+RMSD (bright); high ipTM from one model alone does not guarantee the same binding
+pose. Agreement between an in-house design model and an independent structure
+predictor is therefore a hit-selection signal that neither score gives on its
+own. Validator-rejected designs are marked with red rings.
 
 | Miniprotein | VHH |
 | :---: | :---: |
 | ![Miniprotein: ESMFold2 ipTM vs Protenix ipTM, colored by binder RMSD](assets/miniprotein_iptm_correlation.png) | ![VHH: ESMFold2 ipTM vs Protenix ipTM, colored by binder RMSD](assets/vhh_iptm_correlation.png) |
 | Design and validation ipTM correlate (Pearson r≈0.72); the brightest, lowest-RMSD designs concentrate in the high-confidence corner. | Same pattern for VHH — the high-confidence corner is tightly aligned (the brightest designs converge on the native pose). |
+
+## Ranking
+
+The pipeline keeps pre-validation selection separate from final hit ranking:
+
+- **Without an evaluator**, `rank` is the ESMFold2 selection order: scoped
+  binder-target ipTM first, followed by the relevant distogram contact proxy.
+- **With an evaluator**, `selection_rank` preserves that ESMFold2 order and
+  determines which designs are sent to validation. `final_rank` is calculated
+  after validation and is the rank used in `ranked_results/top_ranked/`
+  filenames. The compact CSV exposes these as `esmfold2_rank` and `rank`, with
+  `validator_rank` showing the evaluator-only confidence order between them.
+
+By default, final-ranking eligibility requires a completed, passing validator
+result, the required scoped confidence metrics, and target-aligned binder Cα
+RMSD at or below **2.5 Å**. `combined_ranking.csv` contains only eligible
+designs. Ineligible rows remain available in `ranking_diagnostics.csv`, with
+`ranking_exclusion_reason` explaining why.
+
+For eligible designs, the default consensus rank is:
+
+```text
+evaluator_score = sqrt(validator_iptm * validator_ipsae)
+
+confidence_score =
+    esmfold2_iptm^0.50
+  * validator_iptm^0.25
+  * validator_ipsae^0.25
+
+agreement_score = exp(-0.5 * (binder_rmsd / 2.5)^2)
+
+final_score = confidence_score^0.90 * agreement_score^0.10
+```
+
+If ipSAE is unavailable and was not required by a validation threshold, scoped
+validator ipTM is used alone for `evaluator_score`. `pareto_front` reports
+non-dominated ESMFold2/evaluator confidence tiers for inspection; it is not a
+hidden sort key. The deterministic final order is eligibility, `final_score`,
+lower RMSD, evaluator score, and ESMFold2 ipTM.
+
+Configure the gate and RMSD contribution in YAML:
+
+```yaml
+analysis:
+  top_k: 100
+  ranking:
+    mode: auto
+    max_binder_rmsd_angstrom: 2.5
+    rmsd_weight: 0.10
+```
+
+Set `rmsd_weight: 0` for gate-only behavior. Set both
+`max_binder_rmsd_angstrom: null` and `rmsd_weight: 0` to make RMSD optional.
+Existing completed campaigns can be reranked without rerunning either model:
+
+```bash
+uv run esmfold2-pipeline analyze /path/to/campaign --top-k 100
+```
 
 ## Output at a glance
 
@@ -288,6 +351,7 @@ campaign/
       validation_results.csv
   ranked_results/
     combined_ranking.csv
+    ranking_diagnostics.csv
     top_ranked/
       esmfold2/                # rank0001_<candidate>_esmfold2.pdb …
       protenix_v2/             # rank0001_<candidate>_protenix_v2.cif …
@@ -304,12 +368,12 @@ exits nonzero and reports the issue if anything is missing or untracked.
 | Guide | What's inside |
 | --- | --- |
 | [Installation & requirements](guide/installation.md) | Hardware, disk, installer flags, model preload, Protenix runtime. |
-| [YAML configuration reference](guide/configuration.md) | Every config field, frameworks, recommended defaults. |
+| [YAML configuration reference](guide/configuration.md) | Every config field, frameworks, analysis ranking, recommended defaults. |
 | [CLI reference](guide/cli-reference.md) | All commands and flags, multi-GPU execution, resume recovery, dev checks. |
 | [Structure targets & hotspots](guide/structure-targets.md) | Target modes, hotspots, indexing, distogram conditioning. |
-| [Optional Protenix validation](guide/validation.md) | The post-critic validation stage and its lifecycle. |
+| [Optional Protenix validation](guide/validation.md) | Post-critic validation, consensus ranking, and reranking. |
 | [Runtime & scaling](guide/runtime-and-scaling.md) | Preprint scale, compute estimates, campaign progression. |
-| [Output layout](guide/outputs.md) | The full campaign directory tree and per-file notes. |
+| [Output layout](guide/outputs.md) | Campaign tree, rank field semantics, and per-file notes. |
 
 ## Current limitations
 

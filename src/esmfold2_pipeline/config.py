@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+import math
 import os
 from pathlib import Path
 import re
@@ -54,6 +55,10 @@ DEFAULT_TARGET_GEOMETRY_DRIFT_WEIGHT = 2.5
 DEFAULT_TARGET_GEOMETRY_DRIFT_TOLERANCE_ANGSTROM = 0.1
 DEFAULT_TARGET_GEOMETRY_DRIFT_STIFFNESS_ANGSTROM = 0.1
 DEFAULT_ANALYSIS_TOP_K = 100
+DEFAULT_ANALYSIS_RANKING_MODE = "auto"
+DEFAULT_ANALYSIS_MAX_BINDER_RMSD_ANGSTROM = 2.5
+DEFAULT_ANALYSIS_RMSD_WEIGHT = 0.10
+ANALYSIS_RANKING_MODES = {"auto", "consensus"}
 HOTSPOT_LOSS_MODES = {"entropy_hotspot", "probability_hinge"}
 BINDER_TARGET_CONTACT_MODES = {"legacy", "mosaic_cdr"}
 MOSAIC_FRAMEWORK_CONTACT_PENALTY_SCOPES = {"auto", "hotspot", "target_all"}
@@ -198,11 +203,31 @@ class TargetGeometryDriftConfig:
 
 
 @dataclass(frozen=True)
-class AnalysisConfig:
-    top_k: int = DEFAULT_ANALYSIS_TOP_K
+class AnalysisRankingConfig:
+    mode: str = DEFAULT_ANALYSIS_RANKING_MODE
+    max_binder_rmsd_angstrom: float | None = (
+        DEFAULT_ANALYSIS_MAX_BINDER_RMSD_ANGSTROM
+    )
+    rmsd_weight: float = DEFAULT_ANALYSIS_RMSD_WEIGHT
 
     def to_resolved_dict(self) -> dict[str, Any]:
-        return {"top_k": self.top_k}
+        return {
+            "mode": self.mode,
+            "max_binder_rmsd_angstrom": self.max_binder_rmsd_angstrom,
+            "rmsd_weight": self.rmsd_weight,
+        }
+
+
+@dataclass(frozen=True)
+class AnalysisConfig:
+    top_k: int = DEFAULT_ANALYSIS_TOP_K
+    ranking: AnalysisRankingConfig = field(default_factory=AnalysisRankingConfig)
+
+    def to_resolved_dict(self) -> dict[str, Any]:
+        return {
+            "top_k": self.top_k,
+            "ranking": self.ranking.to_resolved_dict(),
+        }
 
 
 @dataclass(frozen=True)
@@ -1231,7 +1256,50 @@ def _parse_analysis_config(raw: dict[str, Any]) -> AnalysisConfig:
     )
     if top_k <= 0:
         raise ValueError("analysis.top_k must be positive")
-    return AnalysisConfig(top_k=top_k)
+
+    ranking_raw = raw.get("ranking", {})
+    if ranking_raw is None:
+        ranking_raw = {}
+    if not isinstance(ranking_raw, dict):
+        raise ValueError("analysis.ranking must be a mapping")
+    mode = _parse_choice(
+        ranking_raw.get("mode", DEFAULT_ANALYSIS_RANKING_MODE),
+        "analysis.ranking.mode",
+        ANALYSIS_RANKING_MODES,
+    )
+    max_rmsd_value = ranking_raw.get(
+        "max_binder_rmsd_angstrom",
+        DEFAULT_ANALYSIS_MAX_BINDER_RMSD_ANGSTROM,
+    )
+    if max_rmsd_value is None:
+        max_binder_rmsd_angstrom = None
+    else:
+        max_binder_rmsd_angstrom = _coerce_float(
+            max_rmsd_value,
+            "analysis.ranking.max_binder_rmsd_angstrom",
+        )
+        if not math.isfinite(max_binder_rmsd_angstrom) or max_binder_rmsd_angstrom <= 0:
+            raise ValueError(
+                "analysis.ranking.max_binder_rmsd_angstrom must be positive or null"
+            )
+    rmsd_weight = _optional_float(
+        ranking_raw,
+        "analysis.ranking.rmsd_weight",
+        "rmsd_weight",
+        default=DEFAULT_ANALYSIS_RMSD_WEIGHT,
+    )
+    if not math.isfinite(rmsd_weight) or not 0 <= rmsd_weight < 1:
+        raise ValueError(
+            "analysis.ranking.rmsd_weight must be at least 0 and less than 1"
+        )
+    return AnalysisConfig(
+        top_k=top_k,
+        ranking=AnalysisRankingConfig(
+            mode=mode,
+            max_binder_rmsd_angstrom=max_binder_rmsd_angstrom,
+            rmsd_weight=rmsd_weight,
+        ),
+    )
 
 
 def _coerce_float(value: Any, dotted_name: str) -> float:

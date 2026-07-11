@@ -45,6 +45,66 @@ obviously weak designs out of expensive validation and final pass sets. Set
 Target MSA server or provided-MSA settings infer `use_msa: true` when
 `use_msa` is omitted. Explicit `use_msa: false` remains an opt-out.
 
+## Final consensus ranking
+
+ESMFold2 ipTM ranking is used first to choose which designs are worth sending
+to Protenix. After validation, `analyze` replaces that selection order with a
+final consensus rank based on ESMFold2 ipTM, scoped Protenix ipTM/ipSAE, and
+target-aligned binder C-alpha RMSD. The default RMSD gate is `2.5` angstrom;
+RMSD also contributes 10% of the final score so that, within the passing set,
+closer pose agreement is preferred.
+
+The two ranks have distinct meanings:
+
+- `selection_rank` is the ESMFold2 pre-validation order and remains useful for
+  comparing design-time confidence with validation outcomes. It is exported as
+  `esmfold2_rank` in the compact CSV.
+- `validator_rank` is the evaluator-only order across completed rows with valid
+  evaluator metrics, ranked by evaluator score, validator ipTM, validator
+  ipSAE, then design name. It does not include RMSD or ESMFold2 confidence.
+- `final_rank` is the post-validation consensus order used for rank-prefixed
+  paired structures and the compact user-facing ranking CSV.
+- `validation_rank` in the validator report is a validator-local diagnostic,
+  not the final campaign rank.
+
+Final-ranking eligibility requires completed validation, `validator_passed`,
+valid ESMFold2 and scoped validator ipTM values, and a usable RMSD when the gate
+or RMSD weighting is enabled. Missing ipSAE falls back to scoped validator ipTM
+unless the user explicitly configured an ipSAE validation threshold.
+
+The default score is:
+
+```text
+evaluator_score = sqrt(protenix_iptm * protenix_ipsae)
+confidence_score = esmfold2_iptm^0.50
+                 * protenix_iptm^0.25
+                 * protenix_ipsae^0.25
+agreement_score = exp(-0.5 * (binder_rmsd / 2.5)^2)
+final_score = confidence_score^0.90 * agreement_score^0.10
+```
+
+The monotonic confidence calculation is Pareto-consistent: a design that is
+worse on every confidence component cannot outrank its dominator. The exported
+`pareto_front` field exposes ESMFold2/evaluator confidence fronts as a
+diagnostic, but final sorting uses `final_score` rather than Pareto front number.
+
+Configure this under `analysis.ranking`, or override it for a reranking run:
+
+```bash
+uv run esmfold2-pipeline analyze /path/to/campaign \
+  --max-binder-rmsd-angstrom 2.5 \
+  --rmsd-weight 0.10
+```
+
+`combined_ranking.csv` contains only eligible final-ranked designs.
+`ranking_diagnostics.csv` retains every validator row, including exclusion
+reasons and intermediate scores. Only eligible rows are copied into the
+rank-prefixed paired structure folders.
+
+Rerunning `analyze` only reads the existing database and structures and rewrites
+the compact ranking CSV, diagnostics, summary, plots, and top-ranked copies. It
+does not rerun ESMFold2, MSA generation, or Protenix.
+
 ## Cold starts and retries
 
 On a fresh machine, the first validation run can be much slower than later

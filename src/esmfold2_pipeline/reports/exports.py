@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import Counter
 import csv
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from esmfold2_pipeline.artifact_layout import (
     ANALYSIS_COMBINED_RANKING_CSV,
     ANALYSIS_DIR,
     ANALYSIS_PLOTS_DIR,
+    ANALYSIS_RANKING_DIAGNOSTICS_CSV,
     ANALYSIS_RANKING_SUMMARY_JSON,
     ANALYSIS_TOP_RANKED_DIR,
     ESMFOLD2_DIR,
@@ -39,7 +41,14 @@ from esmfold2_pipeline.artifacts import (
     write_json_atomic,
     write_text_atomic,
 )
-from esmfold2_pipeline.config import DEFAULT_ANALYSIS_TOP_K
+from esmfold2_pipeline.config import (
+    ANALYSIS_RANKING_MODES,
+    DEFAULT_ANALYSIS_MAX_BINDER_RMSD_ANGSTROM,
+    DEFAULT_ANALYSIS_RANKING_MODE,
+    DEFAULT_ANALYSIS_RMSD_WEIGHT,
+    DEFAULT_ANALYSIS_TOP_K,
+    AnalysisRankingConfig,
+)
 from esmfold2_pipeline.db import connect_database
 from esmfold2_pipeline.planning import binder_code
 from esmfold2_pipeline.reports.status import inspect_campaign
@@ -226,11 +235,40 @@ VALIDATION_STRUCTURES_MANIFEST_FIELDS = [
     "validator_metric_scope",
 ]
 
-COMBINED_RANKING_FIELDS = [
-    "analysis_rank",
+RANKING_DIAGNOSTIC_FIELDS = [
+    "final_rank",
+    "validator_rank",
+    "ranking_eligible",
+    "ranking_exclusion_reason",
+    "ranking_mode",
+    "ranking_metric_basis",
+    "confidence_score",
+    "evaluator_score",
+    "agreement_score",
+    "final_score",
+    "pareto_front",
+    "rmsd_pass",
     *[field for field in VALIDATION_MANIFEST_FIELDS if field != "validation_rank"],
     "copied_esmfold2_structure",
     "copied_validator_structure",
+]
+
+COMPACT_RANKING_BASE_FIELDS = [
+    "rank",
+    "design_name",
+    "sequence",
+    "binder_length",
+    "consensus_score",
+    "esmfold2_rank",
+    "esmfold2_iptm",
+    "validator_rank",
+    "validator_iptm",
+    "validator_ipsae",
+    "binder_rmsd_angstrom",
+    "esmfold2_hotspot_distance_angstrom",
+    "validator_hotspot_distance_angstrom",
+    "esmfold2_structure",
+    "validator_structure",
 ]
 
 
@@ -310,10 +348,12 @@ class ValidationReportResult:
 @dataclass(frozen=True)
 class AnalysisResult:
     combined_ranking_csv: Path
+    diagnostics_csv: Path
     summary_json: Path
     plots_dir: Path
     top_ranked_dir: Path
     ranked_count: int
+    diagnostic_count: int
     copied_designs: int
 
 
@@ -595,6 +635,8 @@ def analyze_campaign(
     campaign_dir: str | Path,
     *,
     top_k: int | None = None,
+    max_binder_rmsd_angstrom: float | None = None,
+    rmsd_weight: float | None = None,
 ) -> AnalysisResult:
     """Rank validated designs and copy top-k paired structures for inspection."""
 
@@ -608,13 +650,13 @@ def analyze_campaign(
     plots_dir = analysis_dir / ANALYSIS_PLOTS_DIR
     top_ranked_dir = analysis_dir / ANALYSIS_TOP_RANKED_DIR
     task_rows = _validation_task_rows(root)
-    ranked_rows = [
-        {"analysis_rank": index, **row}
-        for index, row in enumerate(
-            sorted(task_rows, key=_combined_ranking_sort_key),
-            start=1,
-        )
-    ]
+    ranking_config = _analysis_ranking_config(
+        root,
+        max_binder_rmsd_angstrom=max_binder_rmsd_angstrom,
+        rmsd_weight=rmsd_weight,
+    )
+    scored_rows = _score_analysis_rows(task_rows, config=ranking_config)
+    ranked_rows, diagnostic_rows = _finalize_analysis_rows(scored_rows)
 
     copied_designs = _write_top_ranked_structures(
         root,
@@ -623,37 +665,54 @@ def analyze_campaign(
         top_k=top_k,
     )
     combined_ranking_csv = analysis_dir / ANALYSIS_COMBINED_RANKING_CSV
+    compact_rows = [_compact_ranking_row(row) for row in ranked_rows]
     write_text_atomic(
         combined_ranking_csv,
         _csv_text(
-            _validation_report_fields(COMBINED_RANKING_FIELDS, ranked_rows),
-            ranked_rows,
+            _compact_ranking_fields(compact_rows),
+            compact_rows,
+        ),
+    )
+    diagnostics_csv = analysis_dir / ANALYSIS_RANKING_DIAGNOSTICS_CSV
+    write_text_atomic(
+        diagnostics_csv,
+        _csv_text(
+            _validation_report_fields(
+                RANKING_DIAGNOSTIC_FIELDS,
+                diagnostic_rows,
+            ),
+            diagnostic_rows,
         ),
     )
     plot_paths, plot_warnings = _write_analysis_plots(
         plots_dir=plots_dir,
-        ranked_rows=ranked_rows,
+        ranked_rows=diagnostic_rows,
     )
     summary_json = write_json_atomic(
         analysis_dir / ANALYSIS_RANKING_SUMMARY_JSON,
         _analysis_summary(
             root,
             ranked_rows=ranked_rows,
+            diagnostic_rows=diagnostic_rows,
             combined_ranking_csv=combined_ranking_csv,
+            diagnostics_csv=diagnostics_csv,
             top_ranked_dir=top_ranked_dir,
             top_k=top_k,
             copied_designs=copied_designs,
             plot_paths=plot_paths,
             plot_warnings=plot_warnings,
+            ranking_config=ranking_config,
         ),
     )
 
     return AnalysisResult(
         combined_ranking_csv=combined_ranking_csv,
+        diagnostics_csv=diagnostics_csv,
         summary_json=summary_json,
         plots_dir=plots_dir,
         top_ranked_dir=top_ranked_dir,
         ranked_count=len(ranked_rows),
+        diagnostic_count=len(diagnostic_rows),
         copied_designs=copied_designs,
     )
 
@@ -689,15 +748,342 @@ def _analysis_top_k(root: Path) -> int:
     return DEFAULT_ANALYSIS_TOP_K
 
 
-def _combined_ranking_sort_key(row: dict[str, Any]) -> tuple[int, int, float, float, float, float, int, str]:
+def _analysis_ranking_config(
+    root: Path,
+    *,
+    max_binder_rmsd_angstrom: float | None,
+    rmsd_weight: float | None,
+) -> AnalysisRankingConfig:
+    metadata = _campaign_metadata(root)
+    analysis = metadata.get("analysis")
+    analysis = analysis if isinstance(analysis, dict) else {}
+    raw = analysis.get("ranking")
+    raw = raw if isinstance(raw, dict) else {}
+
+    mode = str(raw.get("mode", DEFAULT_ANALYSIS_RANKING_MODE))
+    if mode not in ANALYSIS_RANKING_MODES:
+        choices = ", ".join(sorted(ANALYSIS_RANKING_MODES))
+        raise ValueError(f"analysis.ranking.mode must be one of: {choices}")
+
+    configured_max_rmsd = raw.get(
+        "max_binder_rmsd_angstrom",
+        DEFAULT_ANALYSIS_MAX_BINDER_RMSD_ANGSTROM,
+    )
+    if configured_max_rmsd is None:
+        resolved_max_rmsd = None
+    else:
+        resolved_max_rmsd = _positive_finite_float(
+            configured_max_rmsd,
+            "analysis.ranking.max_binder_rmsd_angstrom",
+        )
+    if max_binder_rmsd_angstrom is not None:
+        resolved_max_rmsd = _positive_finite_float(
+            max_binder_rmsd_angstrom,
+            "max_binder_rmsd_angstrom",
+        )
+
+    configured_rmsd_weight = raw.get(
+        "rmsd_weight",
+        DEFAULT_ANALYSIS_RMSD_WEIGHT,
+    )
+    resolved_rmsd_weight = _ranking_weight(
+        configured_rmsd_weight,
+        "analysis.ranking.rmsd_weight",
+    )
+    if rmsd_weight is not None:
+        resolved_rmsd_weight = _ranking_weight(rmsd_weight, "rmsd_weight")
+
+    return AnalysisRankingConfig(
+        mode=mode,
+        max_binder_rmsd_angstrom=resolved_max_rmsd,
+        rmsd_weight=resolved_rmsd_weight,
+    )
+
+
+def _positive_finite_float(value: Any, name: str) -> float:
+    parsed = _optional_float_value(value)
+    if parsed is None or not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError(f"{name} must be a positive finite number")
+    return parsed
+
+
+def _ranking_weight(value: Any, name: str) -> float:
+    parsed = _optional_float_value(value)
+    if parsed is None or not math.isfinite(parsed) or not 0 <= parsed < 1:
+        raise ValueError(f"{name} must be at least 0 and less than 1")
+    return parsed
+
+
+def _score_analysis_rows(
+    rows: list[dict[str, Any]],
+    *,
+    config: AnalysisRankingConfig,
+) -> list[dict[str, Any]]:
+    scored = [_score_analysis_row(row, config=config) for row in rows]
+    _assign_pareto_fronts(scored)
+    return scored
+
+
+def _compact_ranking_row(row: dict[str, Any]) -> dict[str, Any]:
+    compact = {
+        "rank": row.get("final_rank"),
+        "design_name": row.get("candidate_id"),
+        "sequence": row.get("designed_sequence"),
+        "binder_type": row.get("binder_type"),
+        "framework": row.get("framework"),
+        "binder_length": row.get("binder_length"),
+        "consensus_score": row.get("final_score"),
+        "esmfold2_rank": row.get("selection_rank"),
+        "esmfold2_iptm": row.get("esm_iptm"),
+        "validator_rank": row.get("validator_rank"),
+        "validator_iptm": row.get("validator_iptm"),
+        "validator_ipsae": row.get("validator_ipsae"),
+        "binder_rmsd_angstrom": row.get(
+            "binder_ca_rmsd_after_target_alignment"
+        ),
+        "esmfold2_hotspot_distance_angstrom": row.get(
+            "esm_hotspot_distance_angstrom"
+        ),
+        "validator_hotspot_distance_angstrom": row.get(
+            "validator_hotspot_distance_angstrom"
+        ),
+        "esmfold2_structure": row.get("source_structure_path"),
+        "validator_structure": row.get("validated_structure_path"),
+    }
+    for field in CDR_FIELDS:
+        compact[field] = row.get(field)
+    return compact
+
+
+def _finalize_analysis_rows(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    _assign_validator_ranks(rows)
+    diagnostic_rows = sorted(rows, key=_combined_ranking_sort_key)
+    ranked_rows: list[dict[str, Any]] = []
+    for row in diagnostic_rows:
+        if _optional_bool_value(row.get("ranking_eligible")):
+            row["final_rank"] = len(ranked_rows) + 1
+            ranked_rows.append(row)
+        else:
+            row["final_rank"] = None
+    return ranked_rows, diagnostic_rows
+
+
+def _assign_validator_ranks(rows: list[dict[str, Any]]) -> None:
+    rankable = [
+        row
+        for row in rows
+        if str(row.get("_validator_status") or "") == "completed"
+        and _optional_float_value(row.get("evaluator_score")) is not None
+    ]
+    rankable.sort(
+        key=lambda row: (
+            _descending(row.get("evaluator_score")),
+            _descending(row.get("validator_iptm")),
+            _descending(row.get("validator_ipsae")),
+            str(row.get("candidate_id") or ""),
+        )
+    )
+    for row in rows:
+        row["validator_rank"] = None
+    for rank, row in enumerate(rankable, start=1):
+        row["validator_rank"] = rank
+
+
+def _compact_ranking_fields(rows: list[dict[str, Any]]) -> list[str]:
+    fields = list(COMPACT_RANKING_BASE_FIELDS)
+    insertion_index = fields.index("sequence") + 1
+    if any(row.get("framework") not in (None, "") for row in rows):
+        fields.insert(insertion_index, "framework")
+        insertion_index += 1
+    for field in _cdr_fields_for_rows(rows):
+        if any(row.get(field) not in (None, "") for row in rows):
+            fields.insert(insertion_index, field)
+            insertion_index += 1
+
+    optional_fields = (
+        "validator_ipsae",
+        "esmfold2_hotspot_distance_angstrom",
+        "validator_hotspot_distance_angstrom",
+    )
+    for field in optional_fields:
+        if not any(row.get(field) not in (None, "") for row in rows):
+            fields.remove(field)
+    return fields
+
+
+def _score_analysis_row(
+    row: dict[str, Any],
+    *,
+    config: AnalysisRankingConfig,
+) -> dict[str, Any]:
+    result = dict(row)
+    reasons: list[str] = []
+    resolved_mode = "consensus" if config.mode == "auto" else config.mode
+
+    if str(row.get("_validator_status") or "") != "completed":
+        reasons.append("validator status is not completed")
+    if not _validation_task_passed(row):
+        reasons.append("validator did not pass")
+
+    esm_iptm = _ranking_unit_interval(
+        row.get("esm_iptm"),
+        "missing or invalid ESMFold2 ipTM",
+        reasons,
+    )
+    validator_iptm = _ranking_unit_interval(
+        row.get("validator_iptm"),
+        "missing or invalid validator ipTM",
+        reasons,
+    )
+
+    validator_ipsae_raw = row.get("validator_ipsae")
+    validator_ipsae: float | None = None
+    if validator_ipsae_raw not in (None, ""):
+        validator_ipsae = _ranking_unit_interval(
+            validator_ipsae_raw,
+            "invalid validator ipSAE",
+            reasons,
+        )
+
+    evaluator_score: float | None = None
+    confidence_score: float | None = None
+    metric_basis = "esmfold2_iptm+validator_iptm"
+    if validator_iptm is not None:
+        if validator_ipsae is None and validator_ipsae_raw in (None, ""):
+            evaluator_score = validator_iptm
+        elif validator_ipsae is not None:
+            evaluator_score = math.sqrt(validator_iptm * validator_ipsae)
+            metric_basis += "+validator_ipsae"
+    if esm_iptm is not None and evaluator_score is not None:
+        confidence_score = math.sqrt(esm_iptm * evaluator_score)
+
+    rmsd = _optional_float_value(
+        row.get("binder_ca_rmsd_after_target_alignment")
+    )
+    if rmsd is not None and (not math.isfinite(rmsd) or rmsd < 0):
+        rmsd = None
+    rmsd_required = (
+        config.max_binder_rmsd_angstrom is not None or config.rmsd_weight > 0
+    )
+    rmsd_pass: bool | None = None
+    if rmsd is None:
+        if rmsd_required:
+            reasons.append("missing binder CA RMSD after target alignment")
+    elif config.max_binder_rmsd_angstrom is None:
+        rmsd_pass = True
+    else:
+        rmsd_pass = rmsd <= config.max_binder_rmsd_angstrom
+        if not rmsd_pass:
+            reasons.append(
+                f"binder CA RMSD {rmsd:.3f} exceeds "
+                f"{config.max_binder_rmsd_angstrom:.3f} angstrom"
+            )
+
+    agreement_score: float | None = None
+    if rmsd is not None:
+        agreement_scale = (
+            config.max_binder_rmsd_angstrom
+            or DEFAULT_ANALYSIS_MAX_BINDER_RMSD_ANGSTROM
+        )
+        agreement_score = math.exp(-0.5 * (rmsd / agreement_scale) ** 2)
+
+    final_score: float | None = None
+    if confidence_score is not None:
+        if config.rmsd_weight == 0:
+            final_score = confidence_score
+        elif agreement_score is not None:
+            final_score = (
+                confidence_score ** (1 - config.rmsd_weight)
+                * agreement_score ** config.rmsd_weight
+            )
+
+    result.update(
+        {
+            "ranking_eligible": not reasons,
+            "ranking_exclusion_reason": "; ".join(reasons) or None,
+            "ranking_mode": resolved_mode,
+            "ranking_metric_basis": metric_basis,
+            "confidence_score": confidence_score,
+            "evaluator_score": evaluator_score,
+            "agreement_score": agreement_score,
+            "final_score": final_score,
+            "pareto_front": None,
+            "rmsd_pass": rmsd_pass,
+        }
+    )
+    return result
+
+
+def _ranking_unit_interval(
+    value: Any,
+    reason: str,
+    reasons: list[str],
+) -> float | None:
+    parsed = _optional_float_value(value)
+    if parsed is None or not math.isfinite(parsed) or not 0 <= parsed <= 1:
+        reasons.append(reason)
+        return None
+    return parsed
+
+
+def _assign_pareto_fronts(rows: list[dict[str, Any]]) -> None:
+    points: list[tuple[float, float, str, dict[str, Any]]] = []
+    for row in rows:
+        if not _optional_bool_value(row.get("ranking_eligible")):
+            continue
+        esm_iptm = _optional_float_value(row.get("esm_iptm"))
+        evaluator_score = _optional_float_value(row.get("evaluator_score"))
+        if esm_iptm is None or evaluator_score is None:
+            continue
+        points.append(
+            (
+                esm_iptm,
+                evaluator_score,
+                str(row.get("candidate_id") or ""),
+                row,
+            )
+        )
+
+    points.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    front_maxima_negated: list[float] = []
+    index = 0
+    while index < len(points):
+        esm_iptm, evaluator_score = points[index][0], points[index][1]
+        end = index + 1
+        while (
+            end < len(points)
+            and points[end][0] == esm_iptm
+            and points[end][1] == evaluator_score
+        ):
+            end += 1
+
+        front_index = bisect_right(front_maxima_negated, -evaluator_score)
+        pareto_front = front_index + 1
+        for point in points[index:end]:
+            point[3]["pareto_front"] = pareto_front
+
+        if front_index == len(front_maxima_negated):
+            front_maxima_negated.append(-evaluator_score)
+        else:
+            front_maxima_negated[front_index] = -evaluator_score
+        index = end
+
+
+def _combined_ranking_sort_key(
+    row: dict[str, Any],
+) -> tuple[int, int, int, float, float, float, float, int, str]:
     status_order = _validation_status_order(row.get("_validator_status"))
+    eligible_order = 0 if _optional_bool_value(row.get("ranking_eligible")) else 1
     pass_order = 0 if _optional_bool_value(row.get("validator_passed")) else 1
     return (
         status_order,
+        eligible_order,
         pass_order,
-        _descending(row.get("validator_iptm")),
-        _descending(row.get("validator_ipsae")),
+        _descending(row.get("final_score")),
         _ascending(row.get("binder_ca_rmsd_after_target_alignment")),
+        _descending(row.get("evaluator_score")),
         _descending(row.get("esm_iptm")),
         _optional_int_value(row.get("selection_rank")) or 10**9,
         str(row.get("candidate_id") or ""),
@@ -713,13 +1099,17 @@ def _write_top_ranked_structures(
 ) -> int:
     _clear_generated_tree(top_ranked_dir)
     copied_designs = 0
-    for row in ranked_rows[:top_k]:
+    for row in ranked_rows:
+        if copied_designs >= top_k:
+            break
+        if not _optional_bool_value(row.get("ranking_eligible")):
+            continue
         try:
             source_path = _artifact_path(root, str(row.get("source_structure_path") or ""))
             validated_path = _artifact_path(root, str(row.get("validated_structure_path") or ""))
         except Exception:
             continue
-        rank = _optional_int_value(row.get("analysis_rank")) or copied_designs + 1
+        rank = _optional_int_value(row.get("final_rank")) or copied_designs + 1
         candidate_id = str(row.get("candidate_id") or "candidate")
         validator_name = validator_slug(str(row.get("validator_model") or "validator"))
         # Group by model so each top-ranked design is a paired pair of files that
@@ -957,43 +1347,77 @@ def _analysis_summary(
     root: Path,
     *,
     ranked_rows: list[dict[str, Any]],
+    diagnostic_rows: list[dict[str, Any]],
     combined_ranking_csv: Path,
+    diagnostics_csv: Path,
     top_ranked_dir: Path,
     top_k: int,
     copied_designs: int,
     plot_paths: list[Path],
     plot_warnings: list[str],
+    ranking_config: AnalysisRankingConfig,
 ) -> dict[str, Any]:
     validator_counts = Counter(
-        str(row.get("validator_model") or "unknown") for row in ranked_rows
+        str(row.get("validator_model") or "unknown") for row in diagnostic_rows
     )
     passing_count = sum(
-        1 for row in ranked_rows if _optional_bool_value(row.get("validator_passed"))
+        1
+        for row in diagnostic_rows
+        if _optional_bool_value(row.get("validator_passed"))
     )
     return {
         "campaign": _campaign_metadata(root),
         "generated_at": _utc_now_text(),
         "outputs": {
             "combined_ranking_csv": combined_ranking_csv.relative_to(root).as_posix(),
+            "ranking_diagnostics_csv": diagnostics_csv.relative_to(root).as_posix(),
             "top_ranked_dir": top_ranked_dir.relative_to(root).as_posix(),
             "plots": [path.relative_to(root).as_posix() for path in plot_paths],
         },
         "counts": {
             "ranked_designs": len(ranked_rows),
+            "diagnostic_rows": len(diagnostic_rows),
             "validator_pass_count": passing_count,
-            "validator_reject_or_failed_count": len(ranked_rows) - passing_count,
+            "validator_reject_or_failed_count": len(diagnostic_rows) - passing_count,
+            "ranking_eligible_count": len(ranked_rows),
+            "ranking_ineligible_count": len(diagnostic_rows) - len(ranked_rows),
             "top_k": top_k,
             "copied_designs": copied_designs,
         },
-        "pose_agreement": _pose_agreement_summary(ranked_rows),
+        "pose_agreement": _pose_agreement_summary(diagnostic_rows),
         "warnings": plot_warnings,
         "ranking": {
+            "mode": (
+                "consensus" if ranking_config.mode == "auto" else ranking_config.mode
+            ),
+            "configured_mode": ranking_config.mode,
+            "max_binder_rmsd_angstrom": (
+                ranking_config.max_binder_rmsd_angstrom
+            ),
+            "agreement_scale_angstrom": (
+                ranking_config.max_binder_rmsd_angstrom
+                or DEFAULT_ANALYSIS_MAX_BINDER_RMSD_ANGSTROM
+            ),
+            "rmsd_weight": ranking_config.rmsd_weight,
+            "confidence_formula": (
+                "esmfold2_iptm^0.50 * validator_iptm^0.25 * "
+                "validator_ipsae^0.25"
+            ),
+            "agreement_formula": (
+                "exp(-0.5 * (binder_ca_rmsd_after_target_alignment / "
+                "agreement_scale_angstrom)^2)"
+            ),
+            "final_formula": (
+                "confidence_score^(1-rmsd_weight) * "
+                "agreement_score^rmsd_weight"
+            ),
             "sort_order": [
                 "completed validator status first",
+                "ranking_eligible desc",
                 "validator_passed desc",
-                "validator_iptm desc",
-                "validator_ipsae desc",
+                "final_score desc",
                 "binder_ca_rmsd_after_target_alignment asc",
+                "evaluator_score desc",
                 "esm_iptm desc",
             ],
             "validator_models": dict(sorted(validator_counts.items())),
@@ -1006,11 +1430,18 @@ def _top_analysis_summaries(rows: list[dict[str, Any]], limit: int = 10) -> list
     summaries: list[dict[str, Any]] = []
     for row in rows[:limit]:
         item = {
-            "analysis_rank": _optional_int_value(row.get("analysis_rank")),
+            "final_rank": _optional_int_value(row.get("final_rank")),
             "candidate_id": row.get("candidate_id"),
             "selection_rank": _optional_int_value(row.get("selection_rank")),
             "validator_model": row.get("validator_model"),
             "validator_passed": _optional_bool_value(row.get("validator_passed")),
+            "ranking_eligible": _optional_bool_value(row.get("ranking_eligible")),
+            "ranking_exclusion_reason": row.get("ranking_exclusion_reason"),
+            "final_score": _optional_float_value(row.get("final_score")),
+            "confidence_score": _optional_float_value(row.get("confidence_score")),
+            "evaluator_score": _optional_float_value(row.get("evaluator_score")),
+            "agreement_score": _optional_float_value(row.get("agreement_score")),
+            "pareto_front": _optional_int_value(row.get("pareto_front")),
             "esm_iptm": _optional_float_value(row.get("esm_iptm")),
             "validator_iptm": _optional_float_value(row.get("validator_iptm")),
             "validator_ipsae": _optional_float_value(row.get("validator_ipsae")),

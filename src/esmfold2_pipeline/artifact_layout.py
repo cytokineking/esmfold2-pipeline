@@ -29,6 +29,7 @@ VALIDATION_SUMMARY_JSON = "validation_summary.json"
 # "analysis" name.
 ANALYSIS_DIR = "ranked_results"
 ANALYSIS_COMBINED_RANKING_CSV = "combined_ranking.csv"
+ANALYSIS_RANKING_DIAGNOSTICS_CSV = "ranking_diagnostics.csv"
 ANALYSIS_RANKING_SUMMARY_JSON = "ranking_summary.json"
 ANALYSIS_PLOTS_DIR = "plots"
 ANALYSIS_TOP_RANKED_DIR = "top_ranked"

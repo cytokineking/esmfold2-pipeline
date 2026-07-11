@@ -340,7 +340,53 @@ output: {root / "campaign"}
 
             self.assertEqual(config.steps, 150)
             self.assertEqual(config.analysis.top_k, 100)
+            self.assertEqual(config.analysis.ranking.mode, "auto")
+            self.assertEqual(
+                config.analysis.ranking.max_binder_rmsd_angstrom,
+                2.5,
+            )
+            self.assertEqual(config.analysis.ranking.rmsd_weight, 0.10)
             self.assertEqual(config.binder.length_range, (65, 150))
+
+    def test_analysis_consensus_ranking_settings_are_configurable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                f"""
+target:
+  name: ctla4
+binder:
+  scaffold: miniprotein
+campaign:
+  num_designs: 1
+analysis:
+  top_k: 25
+  ranking:
+    mode: consensus
+    max_binder_rmsd_angstrom: 1.5
+    rmsd_weight: 0.2
+output: {root / "campaign"}
+""".lstrip()
+            )
+
+            config = load_campaign_config(config_path)
+
+            self.assertEqual(config.analysis.top_k, 25)
+            self.assertEqual(config.analysis.ranking.mode, "consensus")
+            self.assertEqual(
+                config.analysis.ranking.max_binder_rmsd_angstrom,
+                1.5,
+            )
+            self.assertEqual(config.analysis.ranking.rmsd_weight, 0.2)
+            self.assertEqual(
+                config.to_resolved_dict()["analysis"]["ranking"],
+                {
+                    "mode": "consensus",
+                    "max_binder_rmsd_angstrom": 1.5,
+                    "rmsd_weight": 0.2,
+                },
+            )
 
     def test_antibody_defaults_use_all_frameworks_and_mosaic_cdr(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

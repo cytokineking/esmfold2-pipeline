@@ -45,6 +45,7 @@ campaign/
       validation_summary.json
   ranked_results/
     combined_ranking.csv
+    ranking_diagnostics.csv
     ranking_summary.json
     plots/
     top_ranked/
@@ -99,11 +100,41 @@ campaign/
   `validation/protenix_v2/`.
 - `validation/{model}/structures/.staging/` is a hidden crash-safety staging
   folder used during CIF promotion; completed runs normally leave it empty.
-- `ranked_results/combined_ranking.csv` ranks every analyzable validated design.
-  `ranked_results/top_ranked/` copies only the configured top-k structures for
-  inspection, grouped into `esmfold2/` and `{validator}/` subfolders with paired
-  `rank0001_<candidate_id>_<model>` filenames (the rank joins each structure back
-  to its `combined_ranking.csv` row).
+- `ranked_results/combined_ranking.csv` is the compact user-facing shortlist. It
+  contains eligible designs only, with one final rank and the raw metrics needed
+  to interpret it.
+- `ranked_results/ranking_diagnostics.csv` retains every analyzable validator
+  row, including ineligible designs, exclusion reasons, intermediate scores,
+  Pareto fronts, model internals, runtimes, identifiers, and copied-artifact
+  paths.
+- `ranked_results/top_ranked/` copies only eligible designs up to the configured
+  top-k, grouped into `esmfold2/` and `{validator}/` subfolders with paired
+  `rank0001_<candidate_id>_<model>` filenames. The prefix is the final consensus
+  rank and joins each structure back to its `combined_ranking.csv` row.
+
+For a VHH campaign with hotspots and ipSAE, `combined_ranking.csv` uses this
+column order:
+
+| Column | Meaning |
+| --- | --- |
+| `rank` | Final consensus order and the rank in copied filenames. |
+| `design_name` | Stable candidate name. |
+| `sequence` | Designed binder sequence. |
+| `framework` | Antibody framework; omitted for miniproteins. |
+| `hcdr1`, `hcdr2`, `hcdr3` | Designed VHH CDRs; scFv exports its six CDR columns instead. |
+| `binder_length` | Sequence length, retained as a convenient filter. |
+| `consensus_score` | Final confidence/agreement score used for ranking. |
+| `esmfold2_rank` | Original ESMFold2 selection order. |
+| `esmfold2_iptm` | Scoped ESMFold2 binder-target ipTM. |
+| `validator_rank` | Evaluator-only confidence rank before RMSD/ESMFold2 consensus. |
+| `validator_iptm`, `validator_ipsae` | Scoped evaluator confidence metrics. |
+| `binder_rmsd_angstrom` | Binder C-alpha RMSD after target alignment. |
+| `esmfold2_hotspot_distance_angstrom` | ESMFold2 hotspot distance; omitted without hotspots. |
+| `validator_hotspot_distance_angstrom` | Evaluator hotspot distance; omitted without hotspots. |
+| `esmfold2_structure`, `validator_structure` | Canonical paired structure paths. |
+
+`validation_rank` belongs to `validation/{model}/validation_results.csv` and is
+the validator-local order. It should not be used as the final campaign rank.
 
 ## Reconciling the database
 

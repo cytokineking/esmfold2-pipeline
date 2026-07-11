@@ -26,6 +26,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class CliTest(unittest.TestCase):
+    def test_analyze_accepts_consensus_ranking_overrides(self) -> None:
+        args = cli_module.build_parser().parse_args(
+            [
+                "analyze",
+                "/tmp/campaign",
+                "--max-binder-rmsd-angstrom",
+                "1.5",
+                "--rmsd-weight",
+                "0.2",
+            ]
+        )
+
+        self.assertEqual(args.analysis_max_binder_rmsd_angstrom, 1.5)
+        self.assertEqual(args.analysis_rmsd_weight, 0.2)
+
     def test_check_env_reports_failures(self) -> None:
         result = _run_cli(
             "check-env",
@@ -777,6 +792,13 @@ output: {campaign_dir}
                     campaign_dir
                     / "ranked_results"
                     / "combined_ranking.csv"
+                ).exists()
+            )
+            self.assertTrue(
+                (
+                    campaign_dir
+                    / "ranked_results"
+                    / "ranking_diagnostics.csv"
                 ).exists()
             )
 

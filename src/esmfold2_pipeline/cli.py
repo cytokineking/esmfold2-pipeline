@@ -407,6 +407,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="number of top validated paired structures to copy during launch analysis",
     )
+    launch.add_argument(
+        "--analysis-max-binder-rmsd-angstrom",
+        type=float,
+        default=None,
+        help="override the final-ranking binder RMSD gate; default 2.5 angstrom",
+    )
+    launch.add_argument(
+        "--analysis-rmsd-weight",
+        type=float,
+        default=None,
+        help="override RMSD agreement weight in final ranking; default 0.10",
+    )
     launch.set_defaults(func=_launch)
 
     validate_conditioning = subparsers.add_parser(
@@ -768,6 +780,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="number of top-ranked paired structures to copy; default analysis.top_k",
     )
+    analyze.add_argument(
+        "--max-binder-rmsd-angstrom",
+        "--analysis-max-binder-rmsd-angstrom",
+        dest="analysis_max_binder_rmsd_angstrom",
+        type=float,
+        default=None,
+        help="override the final-ranking binder RMSD gate; default 2.5 angstrom",
+    )
+    analyze.add_argument(
+        "--rmsd-weight",
+        "--analysis-rmsd-weight",
+        dest="analysis_rmsd_weight",
+        type=float,
+        default=None,
+        help="override RMSD agreement weight in final ranking; default 0.10",
+    )
     analyze.set_defaults(func=_analyze)
 
     validate = subparsers.add_parser(
@@ -844,6 +872,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="number of top-ranked paired structures to copy; default analysis.top_k",
+    )
+    validate.add_argument(
+        "--analysis-max-binder-rmsd-angstrom",
+        type=float,
+        default=None,
+        help="override the final-ranking binder RMSD gate; default 2.5 angstrom",
+    )
+    validate.add_argument(
+        "--analysis-rmsd-weight",
+        type=float,
+        default=None,
+        help="override RMSD agreement weight in final ranking; default 0.10",
     )
     _add_validate_run_arguments(validate, include_campaign_dir=False)
     validate.set_defaults(func=_validate)
@@ -2474,15 +2514,22 @@ def _print_validation_report_result(result) -> None:
 
 def _analyze(args: argparse.Namespace) -> int:
     try:
-        result = analyze_campaign(args.campaign_dir, top_k=args.top_k)
+        result = analyze_campaign(
+            args.campaign_dir,
+            top_k=args.top_k,
+            max_binder_rmsd_angstrom=args.analysis_max_binder_rmsd_angstrom,
+            rmsd_weight=args.analysis_rmsd_weight,
+        )
     except ValueError as exc:
         print(f"error: {exc}")
         return 2
     print(f"combined_ranking_csv: {result.combined_ranking_csv}")
+    print(f"ranking_diagnostics_csv: {result.diagnostics_csv}")
     print(f"ranking_summary_json: {result.summary_json}")
     print(f"plots_dir: {result.plots_dir}")
     print(f"top_ranked_dir: {result.top_ranked_dir}")
     print(f"ranked_designs: {result.ranked_count}")
+    print(f"diagnostic_rows: {result.diagnostic_count}")
     print(f"copied_designs: {result.copied_designs}")
     return 0
 
@@ -2587,14 +2634,25 @@ def _run_validation_lifecycle(args: argparse.Namespace) -> int:
         _print_validation_report_result(report)
     if not args.skip_analysis:
         try:
-            analysis = analyze_campaign(args.campaign_dir, top_k=args.analysis_top_k)
+            analysis = analyze_campaign(
+                args.campaign_dir,
+                top_k=args.analysis_top_k,
+                max_binder_rmsd_angstrom=getattr(
+                    args,
+                    "analysis_max_binder_rmsd_angstrom",
+                    None,
+                ),
+                rmsd_weight=getattr(args, "analysis_rmsd_weight", None),
+            )
         except ValueError as exc:
             print(f"error: {exc}")
             return 2
         print(f"combined_ranking_csv: {analysis.combined_ranking_csv}")
+        print(f"ranking_diagnostics_csv: {analysis.diagnostics_csv}")
         print(f"ranking_summary_json: {analysis.summary_json}")
         print(f"top_ranked_dir: {analysis.top_ranked_dir}")
         print(f"ranked_designs: {analysis.ranked_count}")
+        print(f"diagnostic_rows: {analysis.diagnostic_count}")
         print(f"copied_designs: {analysis.copied_designs}")
     return 0
 

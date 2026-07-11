@@ -5,8 +5,10 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
+from esmfold2_pipeline.config import AnalysisRankingConfig
 from esmfold2_pipeline.execution.mock_worker import (
     plan_one_mock_shard,
     run_one_mock_shard,
@@ -166,18 +168,32 @@ class ValidationReportTest(unittest.TestCase):
                 conn.commit()
                 conn.execute("PRAGMA foreign_keys = ON")
 
-            result = analyze_campaign(campaign_dir, top_k=1)
+            with patch.object(
+                exports_module,
+                "_pose_agreement_metrics",
+                return_value={"binder_ca_rmsd_after_target_alignment": 1.0},
+            ):
+                result = analyze_campaign(campaign_dir, top_k=1)
 
             self.assertEqual(result.ranked_count, 1)
+            self.assertEqual(result.diagnostic_count, 1)
             self.assertEqual(result.copied_designs, 1)
             with result.combined_ranking_csv.open() as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["analysis_rank"], "1")
-            self.assertEqual(rows[0]["candidate_id"], long_candidate_id)
-            self.assertEqual(rows[0]["validator_model"], MOCK_VALIDATION_MODEL)
+            self.assertEqual(rows[0]["rank"], "1")
+            self.assertTrue(float(rows[0]["consensus_score"]) > 0)
+            self.assertEqual(rows[0]["validator_rank"], "1")
+            self.assertEqual(rows[0]["design_name"], long_candidate_id)
             self.assertEqual(rows[0]["binder_length"], "20")
-            self.assertIn("binder_ca_rmsd_after_target_alignment", rows[0])
+            self.assertIn("binder_rmsd_angstrom", rows[0])
+            self.assertEqual(
+                list(rows[0])[:3],
+                ["rank", "design_name", "sequence"],
+            )
+            self.assertNotIn("ranking_eligible", rows[0])
+            self.assertNotIn("analysis_rank", rows[0])
+            self.assertNotIn("validator_model", rows[0])
             self.assertTrue(
                 (
                     result.plots_dir
@@ -202,25 +218,35 @@ class ValidationReportTest(unittest.TestCase):
             self.assertEqual(len(validator_structures), 1)
             self.assertIn(long_candidate_id, esm_structures[0].name)
             self.assertIn(long_candidate_id, validator_structures[0].name)
+            with result.diagnostics_csv.open() as handle:
+                diagnostic_rows = list(csv.DictReader(handle))
+            self.assertEqual(len(diagnostic_rows), 1)
+            self.assertEqual(diagnostic_rows[0]["final_rank"], "1")
+            self.assertEqual(diagnostic_rows[0]["ranking_eligible"], "true")
             self.assertEqual(
-                rows[0]["copied_esmfold2_structure"],
+                diagnostic_rows[0]["validator_model"],
+                MOCK_VALIDATION_MODEL,
+            )
+            self.assertEqual(
+                diagnostic_rows[0]["copied_esmfold2_structure"],
                 esm_structures[0].relative_to(campaign_dir).as_posix(),
             )
             self.assertEqual(
-                rows[0]["copied_validator_structure"],
+                diagnostic_rows[0]["copied_validator_structure"],
                 validator_structures[0].relative_to(campaign_dir).as_posix(),
             )
             self.assertFalse(any(result.top_ranked_dir.glob("**/metadata.json")))
             summary = json.loads(result.summary_json.read_text())
             self.assertEqual(summary["counts"]["ranked_designs"], 1)
+            self.assertEqual(summary["counts"]["diagnostic_rows"], 1)
             self.assertEqual(summary["counts"]["top_k"], 1)
             self.assertEqual(summary["counts"]["copied_designs"], 1)
             self.assertEqual(summary["pose_agreement"]["rows"], 1)
             self.assertTrue(
-                any(
-                    warning.startswith("skipped plot mock_protenix_v2_iptm_vs_binder_rmsd")
-                    for warning in summary["warnings"]
-                )
+                (
+                    result.plots_dir
+                    / "mock_protenix_v2_iptm_vs_binder_rmsd.png"
+                ).exists()
             )
 
     def test_analyze_campaign_defaults_top_k_to_100_without_metadata(self) -> None:
@@ -234,11 +260,197 @@ class ValidationReportTest(unittest.TestCase):
             )
             run_mock_validation(campaign_dir)
 
-            result = analyze_campaign(campaign_dir)
+            with patch.object(
+                exports_module,
+                "_pose_agreement_metrics",
+                return_value={"binder_ca_rmsd_after_target_alignment": 1.0},
+            ):
+                result = analyze_campaign(campaign_dir)
 
             summary = json.loads(result.summary_json.read_text())
             self.assertEqual(summary["counts"]["top_k"], 100)
             self.assertEqual(result.copied_designs, 1)
+
+    def test_consensus_ranking_gates_rmsd_and_rewards_closer_agreement(self) -> None:
+        rows = [
+            {
+                "candidate_id": "close",
+                "_validator_status": "completed",
+                "validator_passed": True,
+                "esm_iptm": 0.8,
+                "validator_iptm": 0.9,
+                "validator_ipsae": 0.8,
+                "binder_ca_rmsd_after_target_alignment": 1.0,
+            },
+            {
+                "candidate_id": "near_gate",
+                "_validator_status": "completed",
+                "validator_passed": True,
+                "esm_iptm": 0.8,
+                "validator_iptm": 0.9,
+                "validator_ipsae": 0.8,
+                "binder_ca_rmsd_after_target_alignment": 2.4,
+            },
+            {
+                "candidate_id": "over_gate",
+                "_validator_status": "completed",
+                "validator_passed": True,
+                "esm_iptm": 0.9,
+                "validator_iptm": 0.95,
+                "validator_ipsae": 0.9,
+                "binder_ca_rmsd_after_target_alignment": 2.6,
+            },
+        ]
+
+        scored = exports_module._score_analysis_rows(
+            rows,
+            config=AnalysisRankingConfig(),
+        )
+        by_id = {row["candidate_id"]: row for row in scored}
+
+        self.assertTrue(by_id["close"]["ranking_eligible"])
+        self.assertTrue(by_id["near_gate"]["ranking_eligible"])
+        self.assertFalse(by_id["over_gate"]["ranking_eligible"])
+        self.assertIn("exceeds 2.500 angstrom", by_id["over_gate"]["ranking_exclusion_reason"])
+        self.assertGreater(by_id["close"]["final_score"], by_id["near_gate"]["final_score"])
+        self.assertAlmostEqual(
+            by_id["close"]["evaluator_score"],
+            (0.9 * 0.8) ** 0.5,
+        )
+        self.assertAlmostEqual(
+            by_id["close"]["confidence_score"],
+            (0.8 * (0.9 * 0.8) ** 0.5) ** 0.5,
+        )
+        ranked = sorted(scored, key=exports_module._combined_ranking_sort_key)
+        self.assertEqual(
+            [row["candidate_id"] for row in ranked],
+            ["close", "near_gate", "over_gate"],
+        )
+
+        ranked_rows, diagnostic_rows = exports_module._finalize_analysis_rows(scored)
+        self.assertEqual(
+            [row["candidate_id"] for row in ranked_rows],
+            ["close", "near_gate"],
+        )
+        self.assertEqual(
+            [row["final_rank"] for row in ranked_rows],
+            [1, 2],
+        )
+        self.assertEqual(len(diagnostic_rows), 3)
+        self.assertIsNone(by_id["over_gate"]["final_rank"])
+        self.assertEqual(by_id["over_gate"]["validator_rank"], 1)
+        self.assertEqual(by_id["close"]["validator_rank"], 2)
+        self.assertEqual(by_id["near_gate"]["validator_rank"], 3)
+
+    def test_consensus_ranking_uses_iptm_when_ipsae_is_missing(self) -> None:
+        scored = exports_module._score_analysis_rows(
+            [
+                {
+                    "candidate_id": "missing_ipsae",
+                    "_validator_status": "completed",
+                    "validator_passed": True,
+                    "esm_iptm": 0.8,
+                    "validator_iptm": 0.9,
+                    "validator_ipsae": None,
+                    "binder_ca_rmsd_after_target_alignment": 1.0,
+                }
+            ],
+            config=AnalysisRankingConfig(),
+        )
+
+        self.assertTrue(scored[0]["ranking_eligible"])
+        self.assertEqual(
+            scored[0]["ranking_metric_basis"],
+            "esmfold2_iptm+validator_iptm",
+        )
+        self.assertAlmostEqual(scored[0]["evaluator_score"], 0.9)
+
+    def test_compact_vhh_ranking_fields_are_user_facing_and_ordered(self) -> None:
+        compact = exports_module._compact_ranking_row(
+            {
+                "final_rank": 1,
+                "candidate_id": "target_vhh_seed1",
+                "designed_sequence": "EVQL",
+                "binder_type": "vhh",
+                "framework": "example_vhh",
+                "hcdr1": "AAA",
+                "hcdr2": "BBB",
+                "hcdr3": "CCC",
+                "binder_length": 4,
+                "final_score": 0.8,
+                "selection_rank": 2,
+                "esm_iptm": 0.75,
+                "validator_rank": 3,
+                "validator_iptm": 0.85,
+                "validator_ipsae": 0.7,
+                "binder_ca_rmsd_after_target_alignment": 1.2,
+                "esm_hotspot_distance_angstrom": 2.1,
+                "validator_hotspot_distance_angstrom": 2.3,
+                "source_structure_path": "esmfold2/example.pdb",
+                "validated_structure_path": "validation/example.cif",
+            }
+        )
+
+        self.assertEqual(
+            exports_module._compact_ranking_fields([compact]),
+            [
+                "rank",
+                "design_name",
+                "sequence",
+                "framework",
+                "hcdr1",
+                "hcdr2",
+                "hcdr3",
+                "binder_length",
+                "consensus_score",
+                "esmfold2_rank",
+                "esmfold2_iptm",
+                "validator_rank",
+                "validator_iptm",
+                "validator_ipsae",
+                "binder_rmsd_angstrom",
+                "esmfold2_hotspot_distance_angstrom",
+                "validator_hotspot_distance_angstrom",
+                "esmfold2_structure",
+                "validator_structure",
+            ],
+        )
+
+    def test_pareto_fronts_track_esm_and_evaluator_dominance(self) -> None:
+        rows = [
+            {
+                "candidate_id": "esm_extreme",
+                "ranking_eligible": True,
+                "esm_iptm": 0.9,
+                "evaluator_score": 0.8,
+            },
+            {
+                "candidate_id": "evaluator_extreme",
+                "ranking_eligible": True,
+                "esm_iptm": 0.8,
+                "evaluator_score": 0.9,
+            },
+            {
+                "candidate_id": "dominated_once",
+                "ranking_eligible": True,
+                "esm_iptm": 0.8,
+                "evaluator_score": 0.8,
+            },
+            {
+                "candidate_id": "dominated_twice",
+                "ranking_eligible": True,
+                "esm_iptm": 0.7,
+                "evaluator_score": 0.7,
+            },
+        ]
+
+        exports_module._assign_pareto_fronts(rows)
+
+        fronts = {row["candidate_id"]: row["pareto_front"] for row in rows}
+        self.assertEqual(fronts["esm_extreme"], 1)
+        self.assertEqual(fronts["evaluator_extreme"], 1)
+        self.assertEqual(fronts["dominated_once"], 2)
+        self.assertEqual(fronts["dominated_twice"], 3)
 
     def test_rmsd_colored_plots_use_fixed_complete_miss_color_cap(self) -> None:
         values = [0.0, 5.0, 55.5]
