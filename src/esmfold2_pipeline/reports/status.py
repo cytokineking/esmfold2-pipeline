@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
+from typing import Any
 
 from esmfold2_pipeline.db import connect_database
 
@@ -25,6 +27,14 @@ class MsaFailureSummary:
 
 @dataclass(frozen=True)
 class CampaignStatus:
+    schema_version: int
+    campaign_db_schema_version: int | None
+    config_hash: str | None
+    state: str
+    latest_activity_at: str | None
+    validation_configured: bool
+    terminal_failure_count: int
+    expected_artifacts: dict[str, bool]
     table_counts: dict[str, int]
     shard_status_counts: dict[str, int]
     candidate_status_counts: dict[str, int]
@@ -44,6 +54,66 @@ class CampaignStatus:
     @property
     def untracked_artifact_count(self) -> int:
         return sum(1 for issue in self.issues if issue.kind == "untracked_artifact")
+
+    @property
+    def terminal(self) -> bool:
+        return self.state in {"complete", "failed", "inconsistent"}
+
+    @property
+    def successful(self) -> bool:
+        return self.state == "complete"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "campaign": {
+                "db_schema_version": self.campaign_db_schema_version,
+                "config_hash": self.config_hash,
+                "state": self.state,
+                "terminal": self.terminal,
+                "successful": self.successful,
+                "latest_activity_at": self.latest_activity_at,
+                "validation_configured": self.validation_configured,
+                "terminal_failure_count": self.terminal_failure_count,
+            },
+            "counts": {
+                "tables": self.table_counts,
+                "shards": self.shard_status_counts,
+                "candidates": self.candidate_status_counts,
+                "critics": self.critic_status_counts,
+                "validation_tasks": self.validation_status_counts,
+                "validation_structures": self.validation_structure_status_counts,
+                "validation_msa_jobs": self.validation_msa_status_counts,
+                "validation_tasks_blocked_by_msa": (
+                    self.validation_msa_blocked_counts
+                ),
+                "attempts": self.attempt_status_counts,
+            },
+            "expected_artifacts": self.expected_artifacts,
+            "reconciliation": {
+                "missing_artifacts": self.missing_artifact_count,
+                "untracked_artifacts": self.untracked_artifact_count,
+                "issues": [
+                    {
+                        "kind": issue.kind,
+                        "path": issue.path,
+                        "message": issue.message,
+                        "table": issue.table,
+                        "row_id": issue.row_id,
+                    }
+                    for issue in self.issues
+                ],
+            },
+            "validation_msa_failures": [
+                {
+                    "msa_job_id": failure.msa_job_id,
+                    "scope": failure.scope,
+                    "candidate_ids": list(failure.candidate_ids),
+                    "error_message": failure.error_message,
+                }
+                for failure in self.validation_msa_failures
+            ],
+        }
 
 
 def inspect_campaign(campaign_dir: str | Path) -> CampaignStatus:
@@ -152,20 +222,65 @@ def inspect_campaign(campaign_dir: str | Path) -> CampaignStatus:
                     )
                 )
 
+        campaign_row = conn.execute(
+            """
+            SELECT schema_version, config_hash, resolved_config_json, updated_at
+            FROM campaign
+            WHERE id = 1
+            """
+        ).fetchone()
+        resolved_config = _json_object(
+            campaign_row["resolved_config_json"] if campaign_row else None
+        )
+        validation_configured = isinstance(resolved_config.get("validation"), dict)
+        shard_counts = _status_counts(conn, "shards")
+        candidate_counts = _status_counts(conn, "candidates")
+        critic_counts = _status_counts(conn, "critic_metrics")
+        validation_counts = _status_counts(conn, "validation_tasks")
+        validation_structure_counts = _status_counts(conn, "validation_structures")
+        validation_msa_counts = _status_counts(conn, "validation_msa_jobs")
+        attempt_counts = _status_counts(conn, "attempts")
+        expected_artifacts = _expected_artifacts(root, validation_configured)
+        terminal_failure_count = _terminal_failure_count(
+            shard_counts=shard_counts,
+            candidate_counts=candidate_counts,
+            critic_counts=critic_counts,
+            validation_counts=validation_counts,
+            validation_msa_counts=validation_msa_counts,
+        )
+
         return CampaignStatus(
-            table_counts=_table_counts(conn),
-            shard_status_counts=_status_counts(conn, "shards"),
-            candidate_status_counts=_status_counts(conn, "candidates"),
-            critic_status_counts=_status_counts(conn, "critic_metrics"),
-            validation_status_counts=_status_counts(conn, "validation_tasks"),
-            validation_structure_status_counts=_status_counts(
-                conn,
-                "validation_structures",
+            schema_version=1,
+            campaign_db_schema_version=(
+                int(campaign_row["schema_version"]) if campaign_row else None
             ),
-            validation_msa_status_counts=_status_counts(conn, "validation_msa_jobs"),
+            config_hash=(str(campaign_row["config_hash"]) if campaign_row else None),
+            state=_campaign_state(
+                shard_counts=shard_counts,
+                candidate_counts=candidate_counts,
+                critic_counts=critic_counts,
+                validation_counts=validation_counts,
+                validation_structure_counts=validation_structure_counts,
+                validation_msa_counts=validation_msa_counts,
+                validation_configured=validation_configured,
+                terminal_failure_count=terminal_failure_count,
+                expected_artifacts=expected_artifacts,
+                issues=issues,
+            ),
+            latest_activity_at=_latest_activity_at(conn),
+            validation_configured=validation_configured,
+            terminal_failure_count=terminal_failure_count,
+            expected_artifacts=expected_artifacts,
+            table_counts=_table_counts(conn),
+            shard_status_counts=shard_counts,
+            candidate_status_counts=candidate_counts,
+            critic_status_counts=critic_counts,
+            validation_status_counts=validation_counts,
+            validation_structure_status_counts=validation_structure_counts,
+            validation_msa_status_counts=validation_msa_counts,
             validation_msa_blocked_counts=_validation_msa_blocked_counts(conn),
             validation_msa_failures=_validation_msa_failures(conn),
-            attempt_status_counts=_status_counts(conn, "attempts"),
+            attempt_status_counts=attempt_counts,
             issues=sorted(issues, key=lambda issue: (issue.kind, issue.path)),
         )
     finally:
@@ -280,6 +395,157 @@ def _table_exists(conn, table: str) -> bool:
         ).fetchone()
         is not None
     )
+
+
+def _json_object(value: str | None) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _expected_artifacts(root: Path, validation_configured: bool) -> dict[str, bool]:
+    artifacts = {
+        "config": (root / "config.yaml").is_file(),
+        "resolved_config": (root / "resolved_config.yaml").is_file(),
+        "campaign_database": (root / "campaign.sqlite").is_file(),
+        "esmfold2_metrics": (root / "esmfold2" / "metrics_all.csv").is_file(),
+        "esmfold2_selection": (
+            root / "esmfold2" / "selected_designs.csv"
+        ).is_file(),
+    }
+    if validation_configured:
+        artifacts.update(
+            {
+                "validation_results": (
+                    root
+                    / "validation"
+                    / "protenix_v2"
+                    / "validation_results.csv"
+                ).is_file(),
+                "combined_ranking": (
+                    root / "ranked_results" / "combined_ranking.csv"
+                ).is_file(),
+                "ranking_summary": (
+                    root / "ranked_results" / "ranking_summary.json"
+                ).is_file(),
+            }
+        )
+    return artifacts
+
+
+def _terminal_failure_count(
+    *,
+    shard_counts: dict[str, int],
+    candidate_counts: dict[str, int],
+    critic_counts: dict[str, int],
+    validation_counts: dict[str, int],
+    validation_msa_counts: dict[str, int],
+) -> int:
+    return sum(
+        (
+            shard_counts.get("failed", 0),
+            shard_counts.get("cancelled", 0),
+            candidate_counts.get("failed", 0),
+            critic_counts.get("failed", 0),
+            validation_counts.get("failed", 0),
+            validation_msa_counts.get("failed", 0),
+        )
+    )
+
+
+def _campaign_state(
+    *,
+    shard_counts: dict[str, int],
+    candidate_counts: dict[str, int],
+    critic_counts: dict[str, int],
+    validation_counts: dict[str, int],
+    validation_structure_counts: dict[str, int],
+    validation_msa_counts: dict[str, int],
+    validation_configured: bool,
+    terminal_failure_count: int,
+    expected_artifacts: dict[str, bool],
+    issues: list[ReconciliationIssue],
+) -> str:
+    if terminal_failure_count:
+        return "failed"
+
+    status_groups = (
+        shard_counts,
+        candidate_counts,
+        critic_counts,
+        validation_counts,
+        validation_structure_counts,
+        validation_msa_counts,
+    )
+    if any(group.get("running", 0) for group in status_groups):
+        return "running"
+    if any(group.get("pending", 0) for group in status_groups):
+        return "pending"
+    if not sum(shard_counts.values()):
+        return "unplanned"
+
+    if issues:
+        return "inconsistent"
+
+    core_complete = (
+        shard_counts.get("completed", 0) == sum(shard_counts.values())
+        and not candidate_counts.get("failed", 0)
+        and not critic_counts.get("failed", 0)
+    )
+    if not core_complete:
+        return "finalizing"
+
+    if validation_configured:
+        validation_terminal = not any(
+            validation_counts.get(status, 0) for status in ("pending", "running")
+        )
+        msa_terminal = not any(
+            validation_msa_counts.get(status, 0)
+            for status in ("pending", "running", "failed")
+        )
+        required_keys = (
+            "validation_results",
+            "combined_ranking",
+            "ranking_summary",
+        )
+        if (
+            validation_terminal
+            and msa_terminal
+            and all(expected_artifacts.get(key, False) for key in required_keys)
+        ):
+            return "complete"
+        return "finalizing"
+
+    if all(
+        expected_artifacts.get(key, False)
+        for key in ("esmfold2_metrics", "esmfold2_selection")
+    ):
+        return "complete"
+    return "finalizing"
+
+
+def _latest_activity_at(conn) -> str | None:
+    queries = (
+        "SELECT MAX(updated_at) FROM campaign",
+        "SELECT MAX(COALESCE(completed_at, heartbeat_at, started_at, created_at)) FROM shards",
+        "SELECT MAX(COALESCE(completed_at, started_at, created_at)) FROM candidates",
+        "SELECT MAX(COALESCE(completed_at, started_at, created_at)) FROM critic_metrics",
+        "SELECT MAX(COALESCE(completed_at, heartbeat_at, started_at, created_at)) FROM validation_tasks",
+        "SELECT MAX(created_at) FROM validation_structures",
+        "SELECT MAX(COALESCE(completed_at, heartbeat_at, started_at, created_at)) FROM validation_msa_jobs",
+        "SELECT MAX(COALESCE(ended_at, started_at)) FROM attempts",
+    )
+    values = []
+    for query in queries:
+        try:
+            row = conn.execute(query).fetchone()
+        except Exception:
+            continue
+        if row and row[0]:
+            values.append(str(row[0]))
+    return max(values) if values else None
 
 
 def _iter_shard_artifacts(root: Path) -> list[str]:

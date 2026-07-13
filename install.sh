@@ -27,8 +27,8 @@ Options:
                            Expected checkpoint SHA-256.
   --protenix-torch-specs LIST
                            Comma/space separated Torch package specs for the
-                           Protenix venv. Default: torch>=2.11.0,
-                           torchvision>=0.26.0,torchaudio>=2.11.0
+                           Protenix venv. Default: torch==2.11.0,
+                           torchvision==0.26.0,torchaudio==2.11.0
   --skip-protenix-checkpoint-download
                            Export the checkpoint directory without downloading weights.
   --no-accelerators        Skip ESMFold2 accelerator packages
@@ -49,10 +49,14 @@ Environment overrides:
   ESMFOLD2_PROTENIX_CHECKPOINT_DIR
   ESMFOLD2_PROTENIX_CHECKPOINT_URL
   ESMFOLD2_PROTENIX_CHECKPOINT_SHA256
+  ESMFOLD2_TORCH_BACKEND
+  ESMFOLD2_PIPELINE_TORCH_SPEC
   ESMFOLD2_PROTENIX_TORCH_SPECS
   ESMFOLD2_DOWNLOAD_PROTENIX_CHECKPOINT=0
   ESMFOLD2_INSTALL_ACCELERATORS=0
   ESMFOLD2_ACCELERATOR_SPECS
+  ESMFOLD2_PROTENIX_ACCELERATOR_SPECS
+  ESMFOLD2_CUEQUIVARIANCE_VERSION
   ESMFOLD2_INSTALL_HMMER=0
   ESMFOLD2_INSTALL_PROTENIX=0
 EOF
@@ -72,7 +76,7 @@ ESM_SOURCE="${ESMFOLD2_ESM_REPO:-https://github.com/Biohub/esm.git}"
 ESM_REF="${ESMFOLD2_ESM_REF:-}"
 PYTHON_VERSION="${ESMFOLD2_PYTHON_VERSION:-3.12}"
 PRELOAD_MODELS_RAW="${ESMFOLD2_PRELOAD_MODELS:-cutoff2025,fast-cutoff2025}"
-DEFAULT_PROTENIX_SOURCE="git+https://github.com/cytokineking/Protenix.git"
+DEFAULT_PROTENIX_SOURCE="git+https://github.com/cytokineking/Protenix.git@2a4a6a516466fe3b1f830f515875da65ebcec049"
 PROTENIX_SOURCE="${ESMFOLD2_PROTENIX_SOURCE:-$DEFAULT_PROTENIX_SOURCE}"
 PROTENIX_ENV="${ESMFOLD2_PROTENIX_ENV:-}"
 PROTENIX_CHECKPOINT_DIR="${ESMFOLD2_PROTENIX_CHECKPOINT_DIR:-${PROTENIX_CHECKPOINT_DIR:-}}"
@@ -80,9 +84,19 @@ DEFAULT_PROTENIX_CHECKPOINT_URL="https://huggingface.co/TMF001/pxdesign-weights/
 DEFAULT_PROTENIX_CHECKPOINT_SHA256="8f931f9774a396b67033d0e58628e1834f4a1448165e04254b40a780b0c0d599"
 PROTENIX_CHECKPOINT_URL="${ESMFOLD2_PROTENIX_CHECKPOINT_URL:-$DEFAULT_PROTENIX_CHECKPOINT_URL}"
 PROTENIX_CHECKPOINT_SHA256="${ESMFOLD2_PROTENIX_CHECKPOINT_SHA256:-$DEFAULT_PROTENIX_CHECKPOINT_SHA256}"
-PROTENIX_TORCH_SPECS_RAW="${ESMFOLD2_PROTENIX_TORCH_SPECS:-torch>=2.11.0,torchvision>=0.26.0,torchaudio>=2.11.0}"
+TORCH_BACKEND="${ESMFOLD2_TORCH_BACKEND:-cu128}"
+PIPELINE_TORCH_SPEC="${ESMFOLD2_PIPELINE_TORCH_SPEC:-torch==2.11.0}"
+PROTENIX_TORCH_SPECS_RAW="${ESMFOLD2_PROTENIX_TORCH_SPECS:-torch==2.11.0,torchvision==0.26.0,torchaudio==2.11.0}"
 DOWNLOAD_PROTENIX_CHECKPOINT="${ESMFOLD2_DOWNLOAD_PROTENIX_CHECKPOINT:-1}"
-ACCELERATOR_SPECS_RAW="${ESMFOLD2_ACCELERATOR_SPECS:-xformers,cuequivariance,cuequivariance-torch,cuequivariance-ops-torch-cu12}"
+case "${TORCH_BACKEND}" in
+  cu128) DEFAULT_CUEQUIVARIANCE_OPS="cuequivariance-ops-torch-cu12" ;;
+  cu130) DEFAULT_CUEQUIVARIANCE_OPS="cuequivariance-ops-torch-cu13" ;;
+  *) die "ESMFOLD2_TORCH_BACKEND must be cu128 or cu130" ;;
+esac
+CUEQUIVARIANCE_VERSION="${ESMFOLD2_CUEQUIVARIANCE_VERSION:-0.10.0}"
+DEFAULT_CUEQUIVARIANCE_SPECS="cuequivariance==${CUEQUIVARIANCE_VERSION},cuequivariance-torch==${CUEQUIVARIANCE_VERSION},${DEFAULT_CUEQUIVARIANCE_OPS}==${CUEQUIVARIANCE_VERSION}"
+ACCELERATOR_SPECS_RAW="${ESMFOLD2_ACCELERATOR_SPECS:-xformers,${DEFAULT_CUEQUIVARIANCE_SPECS}}"
+PROTENIX_ACCELERATOR_SPECS_RAW="${ESMFOLD2_PROTENIX_ACCELERATOR_SPECS:-${DEFAULT_CUEQUIVARIANCE_SPECS}}"
 INSTALL_ACCELERATORS="${ESMFOLD2_INSTALL_ACCELERATORS:-1}"
 INSTALL_HMMER="${ESMFOLD2_INSTALL_HMMER:-1}"
 PRELOAD_MODELS=1
@@ -288,15 +302,19 @@ install_hmmer_if_needed() {
 }
 
 install_uv_if_needed() {
-  if command -v uv >/dev/null 2>&1; then
+  if command -v uv >/dev/null 2>&1 \
+    && uv pip install --help 2>/dev/null | grep -q -- '--torch-backend'; then
     log "using uv at $(command -v uv)"
     return
   fi
   need_command curl
-  log "uv not found; installing uv"
+  log "installing a uv release with --torch-backend support"
   curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="$HOME/.local/bin:$PATH"
+  hash -r
   command -v uv >/dev/null 2>&1 || die "uv install completed but uv is not on PATH"
+  uv pip install --help 2>/dev/null | grep -q -- '--torch-backend' \
+    || die "installed uv does not support --torch-backend"
 }
 
 script_checkout_dir() {
@@ -355,6 +373,14 @@ split_model_list() {
   done
 }
 
+write_torch_constraints() {
+  local path="$1"
+  {
+    printf '%s\n' "$PIPELINE_TORCH_SPEC"
+    split_model_list "$PROTENIX_TORCH_SPECS_RAW"
+  } | awk 'NF && !seen[$0]++' > "$path"
+}
+
 mkdir -p "$PREFIX"
 PREFIX="$(cd "$PREFIX" && pwd)"
 
@@ -373,6 +399,14 @@ fi
 
 cd "$PIPELINE_DIR"
 
+TORCH_CONSTRAINTS="$(mktemp)"
+trap 'rm -f "$TORCH_CONSTRAINTS"' EXIT
+write_torch_constraints "$TORCH_CONSTRAINTS"
+TORCH_RESOLUTION_ARGS=(
+  --torch-backend "$TORCH_BACKEND"
+  --constraints "$TORCH_CONSTRAINTS"
+)
+
 log "installing Python $PYTHON_VERSION with uv if needed"
 uv python install "$PYTHON_VERSION"
 
@@ -380,21 +414,28 @@ log "syncing pipeline environment"
 uv sync --python "$PYTHON_VERSION"
 
 log "installing ESM into the pipeline environment"
-uv pip install -e "$ESM_DIR"
+uv pip install -e "$ESM_DIR" "${TORCH_RESOLUTION_ARGS[@]}"
 
 if [[ "$INSTALL_ACCELERATORS" -eq 1 ]]; then
   log "installing ESMFold2 accelerator packages: $ACCELERATOR_SPECS_RAW"
   mapfile -t ACCELERATOR_SPECS < <(split_model_list "$ACCELERATOR_SPECS_RAW")
-  uv pip install --upgrade "${ACCELERATOR_SPECS[@]}"
+  uv pip install --upgrade "${ACCELERATOR_SPECS[@]}" \
+    "${TORCH_RESOLUTION_ARGS[@]}"
 else
   log "skipping ESMFold2 accelerator packages (--no-accelerators)"
 fi
+
+# Keep a final exact pin after packages which declare a broad Torch range.
+# uv's backend selector applies the PyTorch index only to Torch-family packages;
+# ordinary packages continue to resolve from PyPI without cross-index shadowing.
+log "installing pipeline ${TORCH_BACKEND} Torch runtime: $PIPELINE_TORCH_SPEC"
+uv pip install --upgrade "$PIPELINE_TORCH_SPEC" "${TORCH_RESOLUTION_ARGS[@]}"
 
 if [[ "$INSTALL_PROTENIX" -eq 1 ]]; then
   install_hmmer_if_needed
 
   log "installing VHH MSA numbering dependencies into the pipeline environment"
-  uv pip install --upgrade abnumber anarcii
+  uv pip install --upgrade abnumber anarcii "${TORCH_RESOLUTION_ARGS[@]}"
   log "checking VHH MSA numbering dependencies"
   if [[ "$INSTALL_HMMER" -eq 1 ]]; then
     uv run python - <<'PY'
@@ -419,28 +460,76 @@ PY
   PROTENIX_PYTHON="$PROTENIX_ENV/bin/python"
   [[ -x "$PROTENIX_PYTHON" ]] || die "Protenix environment did not create $PROTENIX_PYTHON"
 
+  # Install broad runtime dependencies before Protenix. Protenix deliberately
+  # pins several of them exactly, so installing Accelerate afterwards could
+  # displace a validated Protenix dependency in uv's incremental mode.
+  log "installing Protenix runtime dependency: accelerate>=0.21.0"
+  uv pip install --python "$PROTENIX_PYTHON" 'accelerate>=0.21.0' \
+    "${TORCH_RESOLUTION_ARGS[@]}"
+
+  log "installing Protenix ${TORCH_BACKEND} Torch stack: $PROTENIX_TORCH_SPECS_RAW"
+  mapfile -t PROTENIX_TORCH_SPECS < <(split_model_list "$PROTENIX_TORCH_SPECS_RAW")
+  uv pip install --python "$PROTENIX_PYTHON" --upgrade \
+    "${PROTENIX_TORCH_SPECS[@]}" "${TORCH_RESOLUTION_ARGS[@]}"
+
+  PROTENIX_ACCELERATOR_SPECS=()
+  if [[ "$INSTALL_ACCELERATORS" -eq 1 ]]; then
+    log "resolving Protenix ${TORCH_BACKEND} accelerator packages with Protenix"
+    mapfile -t PROTENIX_ACCELERATOR_SPECS < <(
+      split_model_list "$PROTENIX_ACCELERATOR_SPECS_RAW"
+    )
+  else
+    log "skipping Protenix accelerator packages (--no-accelerators)"
+  fi
+
   if [[ -d "$PROTENIX_SOURCE" ]]; then
     PROTENIX_DIR="$(cd "$PROTENIX_SOURCE" && pwd)"
     log "installing Protenix from local checkout $PROTENIX_DIR"
-    uv pip install --python "$PROTENIX_PYTHON" -e "$PROTENIX_DIR"
+    uv pip install --python "$PROTENIX_PYTHON" -e "$PROTENIX_DIR" \
+      "${PROTENIX_ACCELERATOR_SPECS[@]}" "${TORCH_RESOLUTION_ARGS[@]}"
   else
     log "installing Protenix package: $PROTENIX_SOURCE"
-    if [[ "$PROTENIX_SOURCE" == "protenix" || "$PROTENIX_SOURCE" == protenix==* || "$PROTENIX_SOURCE" == protenix\>* || "$PROTENIX_SOURCE" == protenix\<* ]]; then
-      uv pip install --python "$PROTENIX_PYTHON" --upgrade "$PROTENIX_SOURCE" --index-url https://pypi.org/simple
-    else
-      uv pip install --python "$PROTENIX_PYTHON" --upgrade "$PROTENIX_SOURCE"
-    fi
+    uv pip install --python "$PROTENIX_PYTHON" --upgrade \
+      "$PROTENIX_SOURCE" "${PROTENIX_ACCELERATOR_SPECS[@]}" \
+      "${TORCH_RESOLUTION_ARGS[@]}"
   fi
 
-  log "upgrading Protenix Torch stack: $PROTENIX_TORCH_SPECS_RAW"
-  mapfile -t PROTENIX_TORCH_SPECS < <(split_model_list "$PROTENIX_TORCH_SPECS_RAW")
-  uv pip install --python "$PROTENIX_PYTHON" --upgrade "${PROTENIX_TORCH_SPECS[@]}"
+  # The current Protenix fork builds a portable fat binary for data-center
+  # Blackwell (sm_100) but omits workstation Blackwell (sm_120). Both supported
+  # Torch backends can build sm_120, so include it in the portable image.
+  log "ensuring Protenix CUDA extensions include RTX PRO Blackwell (sm_120)"
+  "$PROTENIX_PYTHON" - <<'PY'
+from pathlib import Path
+import sysconfig
 
-  log "installing Protenix runtime dependency: accelerate>=0.21.0"
-  uv pip install --python "$PROTENIX_PYTHON" --upgrade 'accelerate>=0.21.0'
+path = (
+    Path(sysconfig.get_paths()["purelib"])
+    / "protenix"
+    / "model"
+    / "layer_norm"
+    / "torch_ext_compile.py"
+)
+text = path.read_text()
+target = '("120", "120")'
+if target not in text:
+    marker = '        ("100", "100"),\n    ]'
+    if marker not in text:
+        raise SystemExit(f"cannot safely add sm_120 target to {path}")
+    text = text.replace(marker, '        ("100", "100"),\n        ("120", "120"),\n    ]', 1)
+    compile(text, str(path), "exec")
+    path.write_text(text)
+if target not in path.read_text():
+    raise SystemExit(f"sm_120 target is absent from {path}")
+PY
+
+  log "checking Protenix dependency integrity"
+  uv pip check --python "$PROTENIX_PYTHON"
 else
   log "skipping Protenix install (--no-protenix)"
 fi
+
+log "checking pipeline dependency integrity"
+uv pip check --python "$PIPELINE_DIR/.venv/bin/python"
 
 if [[ "$INSTALL_PROTENIX" -eq 1 ]]; then
   PROTENIX_CHECKPOINT_DIR="$(mkdir -p "$PROTENIX_CHECKPOINT_DIR" && cd "$PROTENIX_CHECKPOINT_DIR" && pwd)"

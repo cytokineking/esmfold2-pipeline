@@ -142,6 +142,9 @@ uv run esmfold2-pipeline launch \
   --out runs/gpu-check --esm-repo "$ESM_REPO" --gpu-id 0
 
 uv run esmfold2-pipeline status runs/gpu-check
+
+# Stable, versioned machine-readable status for automated clients
+uv run esmfold2-pipeline status runs/gpu-check --json
 ```
 
 This runs one real design end to end — model loading, design, folding, and
@@ -363,6 +366,17 @@ Full annotated tree and per-file notes: [Output layout](guide/outputs.md).
 Run `status` any time to reconcile the database against expected artifacts; it
 exits nonzero and reports the issue if anything is missing or untracked.
 
+`status --json` emits schema version 1 with campaign state, per-table status
+counts, validation/MSA state, expected final artifacts, terminal failures, and
+reconciliation issues. Consumers should use this contract instead of scraping
+the human-readable status output.
+
+`campaign.sqlite` is a live local database and must never be copied while open.
+External checkpoint managers should use Python's `sqlite3.Connection.backup()`
+to a temporary database on the same host, close both connections, require
+`PRAGMA integrity_check = ok`, and only then atomically promote and upload the
+backup. WAL/SHM files are not portable checkpoints.
+
 ## Documentation
 
 | Guide | What's inside |
@@ -374,6 +388,7 @@ exits nonzero and reports the issue if anything is missing or untracked.
 | [Optional Protenix validation](guide/validation.md) | Post-critic validation, consensus ranking, and reranking. |
 | [Runtime & scaling](guide/runtime-and-scaling.md) | Preprint scale, compute estimates, campaign progression. |
 | [Output layout](guide/outputs.md) | Campaign tree, rank field semantics, and per-file notes. |
+| [Machine image build](deploy/image/README.md) | Reproducible bootstrap, manifests, and GPU qualification. |
 
 ## Current limitations
 
