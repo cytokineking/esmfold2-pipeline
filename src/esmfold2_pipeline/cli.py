@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import AbstractContextManager, contextmanager, nullcontext
+import json
 import os
 import shlex
 import sys
@@ -600,6 +601,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="summarize SQLite state and artifact reconciliation issues",
     )
     status.add_argument("campaign_dir", type=Path)
+    status.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="emit versioned machine-readable JSON",
+    )
     status.set_defaults(func=_status)
 
     aggregate = subparsers.add_parser(
@@ -2192,7 +2199,10 @@ def _print_run_multi_result(result) -> None:
 
 def _status(args: argparse.Namespace) -> int:
     status = inspect_campaign(args.campaign_dir)
-    _print_status(status)
+    if args.json_output:
+        print(json.dumps(status.to_dict(), indent=2, sort_keys=True))
+    else:
+        _print_status(status)
     return 1 if status.issues else 0
 
 

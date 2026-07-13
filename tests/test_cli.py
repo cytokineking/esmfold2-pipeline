@@ -1652,6 +1652,51 @@ validation:
             self.assertIn("issues: 1", status.stdout)
             self.assertIn("missing_structure_artifact", status.stdout)
 
+    def test_status_json_emits_versioned_machine_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            campaign_dir = Path(tmpdir) / "campaign"
+            self.assertEqual(_run_cli("plan-mock", campaign_dir).returncode, 0)
+            self.assertEqual(_run_cli("run-mock", campaign_dir).returncode, 0)
+            self.assertEqual(_run_cli("aggregate", campaign_dir).returncode, 0)
+            self.assertEqual(_run_cli("select", campaign_dir).returncode, 0)
+
+            result = _run_cli("status", campaign_dir, "--json")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["schema_version"], 1)
+            self.assertEqual(payload["campaign"]["state"], "complete")
+            self.assertTrue(payload["campaign"]["terminal"])
+            self.assertTrue(payload["campaign"]["successful"])
+            self.assertFalse(payload["campaign"]["validation_configured"])
+            self.assertEqual(payload["counts"]["shards"], {"completed": 1})
+            self.assertEqual(payload["reconciliation"]["issues"], [])
+            self.assertTrue(payload["expected_artifacts"]["esmfold2_metrics"])
+            self.assertTrue(payload["expected_artifacts"]["esmfold2_selection"])
+
+    def test_status_json_preserves_nonzero_reconciliation_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            campaign_dir = Path(tmpdir) / "campaign"
+            self.assertEqual(_run_cli("plan-mock", campaign_dir).returncode, 0)
+            self.assertEqual(_run_cli("run-mock", campaign_dir).returncode, 0)
+            (
+                campaign_dir
+                / "esmfold2"
+                / "structures"
+                / "s000_seed000_c000.pdb"
+            ).unlink()
+
+            result = _run_cli("status", campaign_dir, "--json")
+
+            self.assertEqual(result.returncode, 1)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["campaign"]["state"], "inconsistent")
+            self.assertEqual(payload["reconciliation"]["missing_artifacts"], 1)
+            self.assertEqual(
+                payload["reconciliation"]["issues"][0]["kind"],
+                "missing_structure_artifact",
+            )
+
     def test_validate_plan_command_plans_from_completed_mock_campaign(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             campaign_dir = Path(tmpdir) / "campaign"
