@@ -2639,6 +2639,11 @@ def _run_validation_lifecycle(args: argparse.Namespace) -> int:
         if run_status != 0:
             return run_status
 
+    lifecycle_error = _validation_lifecycle_error(args.campaign_dir)
+    if lifecycle_error is not None:
+        print(f"error: {lifecycle_error}")
+        return 1
+
     if not args.skip_report:
         report = report_validation(args.campaign_dir)
         _print_validation_report_result(report)
@@ -2665,6 +2670,24 @@ def _run_validation_lifecycle(args: argparse.Namespace) -> int:
         print(f"diagnostic_rows: {analysis.diagnostic_count}")
         print(f"copied_designs: {analysis.copied_designs}")
     return 0
+
+
+def _validation_lifecycle_error(campaign_dir: str | Path) -> str | None:
+    """Return a concise error while validation or its MSA dependencies are nonterminal."""
+
+    status = inspect_campaign(campaign_dir)
+    problems: list[str] = []
+    for label, counts in (
+        ("validation_tasks", status.validation_status_counts),
+        ("validation_msa_jobs", status.validation_msa_status_counts),
+    ):
+        for state in ("pending", "running", "failed"):
+            count = int(counts.get(state, 0))
+            if count:
+                problems.append(f"{label} {state}={count}")
+    if not problems:
+        return None
+    return "validation lifecycle is not cleanly terminal: " + "; ".join(problems)
 
 
 def _with_validation_yaml_defaults(

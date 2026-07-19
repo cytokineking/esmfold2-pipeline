@@ -85,6 +85,44 @@ class ValidationMsaPrefetchTest(unittest.TestCase):
             finally:
                 conn.close()
 
+    def test_msa_worker_repairs_ready_job_with_missing_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            conn = _campaign_db(
+                root,
+                validation={
+                    "min_esm_iptm": 0.7,
+                    "msa": {"binder": "single_sequence"},
+                },
+            )
+            store = CampaignStore(conn)
+            _insert_completed_candidate(store, iptm=0.82)
+            conn.close()
+
+            plan_msa_prefetch(root)
+            first = run_msa_prefetch_worker(root)
+            self.assertEqual(first.completed_jobs, 1)
+
+            conn = initialize_database(root / "campaign.sqlite")
+            try:
+                row = conn.execute(
+                    "SELECT cache_paths_json FROM validation_msa_jobs"
+                ).fetchone()
+                paths = json.loads(row["cache_paths_json"])
+            finally:
+                conn.close()
+            Path(paths["non_pairing_path"]).unlink()
+
+            messages: list[str] = []
+            repaired = run_msa_prefetch_worker(root, log=messages.append)
+
+            self.assertEqual(repaired.completed_jobs, 1)
+            self.assertTrue(Path(paths["non_pairing_path"]).is_file())
+            self.assertIn(
+                "reopened ready MSA jobs with missing cache: 1",
+                messages,
+            )
+
     def test_target_template_suppresses_target_msa_prefetch_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

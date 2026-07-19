@@ -194,6 +194,10 @@ def run_msa_prefetch_worker(
             )
             if recovered:
                 _log(log, f"recovered stale MSA jobs: {recovered}")
+        if max_jobs != 0:
+            reopened = store.reopen_ready_msa_jobs_with_missing_cache(base_dir=root)
+            if reopened:
+                _log(log, f"reopened ready MSA jobs with missing cache: {reopened}")
         while max_jobs is None or completed + failed + skipped < max_jobs:
             claim = store.claim_next_pending_msa_job(
                 worker_id=worker_id,

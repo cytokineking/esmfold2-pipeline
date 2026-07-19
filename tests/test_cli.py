@@ -26,6 +26,77 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class CliTest(unittest.TestCase):
+    def test_validation_lifecycle_gate_prevents_final_outputs(self) -> None:
+        args = argparse.Namespace(
+            campaign_dir=Path("/tmp/campaign"),
+            gpus=None,
+            gpu_id=None,
+            skip_msa_plan=True,
+            skip_msa_run=True,
+            skip_report=False,
+            skip_analysis=False,
+        )
+        plan_config = types.SimpleNamespace(validation_config_hash="hash")
+        plan_result = types.SimpleNamespace(
+            model_name="protenix-v2",
+            validation_config_hash="hash",
+            candidate_count=23,
+            selected_count=23,
+            created_count=0,
+            existing_count=23,
+        )
+        with (
+            patch.object(cli_module, "_with_validation_yaml_defaults", return_value=args),
+            patch.object(
+                cli_module,
+                "_validation_plan_config_from_args",
+                return_value=plan_config,
+            ),
+            patch.object(cli_module, "_protenix_runner_config_from_args"),
+            patch.object(
+                cli_module,
+                "plan_validation_tasks",
+                return_value=plan_result,
+            ),
+            patch.object(cli_module, "_validate_run", return_value=0),
+            patch.object(
+                cli_module,
+                "_validation_lifecycle_error",
+                return_value="validation_tasks pending=9",
+            ),
+            patch.object(cli_module, "report_validation") as report,
+            patch.object(cli_module, "analyze_campaign") as analyze,
+        ):
+            status = cli_module._run_validation_lifecycle(args)
+
+        self.assertEqual(status, 1)
+        report.assert_not_called()
+        analyze.assert_not_called()
+
+    def test_validation_lifecycle_rejects_nonterminal_tasks_and_msa_jobs(self) -> None:
+        status = types.SimpleNamespace(
+            validation_status_counts={"completed": 14, "pending": 9},
+            validation_msa_status_counts={"ready": 15, "pending": 8},
+        )
+        with patch.object(cli_module, "inspect_campaign", return_value=status):
+            error = cli_module._validation_lifecycle_error("/tmp/campaign")
+
+        self.assertEqual(
+            error,
+            "validation lifecycle is not cleanly terminal: "
+            "validation_tasks pending=9; validation_msa_jobs pending=8",
+        )
+
+    def test_validation_lifecycle_accepts_completed_and_ready_rows(self) -> None:
+        status = types.SimpleNamespace(
+            validation_status_counts={"completed": 23},
+            validation_msa_status_counts={"ready": 23},
+        )
+        with patch.object(cli_module, "inspect_campaign", return_value=status):
+            error = cli_module._validation_lifecycle_error("/tmp/campaign")
+
+        self.assertIsNone(error)
+
     def test_analyze_accepts_consensus_ranking_overrides(self) -> None:
         args = cli_module.build_parser().parse_args(
             [

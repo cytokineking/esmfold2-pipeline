@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 import hashlib
 import json
 from pathlib import Path
@@ -127,7 +128,7 @@ class ValidationPlanConfig:
             pairing_strategy=self.msa_pairing_strategy,
         )
 
-    @property
+    @cached_property
     def validation_config_hash(self) -> str:
         payload = self.validation_config_payload()
         blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -150,8 +151,14 @@ class ValidationPlanConfig:
             "model": {
                 "name": self.model_name,
                 "command": list(runtime_command) if runtime_command else None,
-                "protenix_root": _path_context(self.protenix_root),
-                "checkpoint_dir": _path_context(self.checkpoint_dir),
+                "protenix_root": _path_context(
+                    self.protenix_root,
+                    include_directory_files=True,
+                ),
+                "checkpoint_dir": _path_context(
+                    self.checkpoint_dir,
+                    include_directory_files=True,
+                ),
             },
             "runtime": {
                 "seeds": list(self.seeds),
@@ -167,7 +174,10 @@ class ValidationPlanConfig:
                 "binder_mode": self.binder_msa_mode,
                 "server_url": _normalized_server_url(self.msa_server_url),
                 "pairing_strategy": self.msa_pairing_strategy,
-                "target_msa_dir": _path_context(self.target_msa_dir),
+                "target_msa_dir": _path_context(
+                    self.target_msa_dir,
+                    include_directory_files=True,
+                ),
                 "target_msa_map_csv": _path_context(self.target_msa_map_csv),
                 "cache_root": _path_context(self.msa_cache_root),
             },
@@ -391,38 +401,57 @@ def _normalized_server_url(value: str | None) -> str | None:
     return text or None
 
 
-def _path_context(path: Path | str | None) -> dict[str, Any] | None:
+def _path_context(
+    path: Path | str | None,
+    *,
+    include_directory_files: bool = False,
+) -> dict[str, Any] | None:
     if path is None:
         return None
     expanded = Path(path).expanduser()
     payload: dict[str, Any] = {"path": str(expanded)}
     try:
-        stat = expanded.stat()
+        expanded.stat()
     except OSError:
         payload["exists"] = False
         return payload
 
+    # Timestamps and directory allocation sizes vary across equivalent image
+    # clones. Semantic files use content digests; directories retain only stable
+    # names and kinds, optionally including direct-file digests.
     payload["exists"] = True
-    payload["kind"] = "dir" if expanded.is_dir() else "file"
-    payload["mtime_ns"] = int(stat.st_mtime_ns)
-    payload["size"] = int(stat.st_size)
-    if expanded.is_dir():
+    is_dir = expanded.is_dir()
+    payload["kind"] = "dir" if is_dir else "file"
+    if not is_dir:
+        digest = _file_sha256(expanded)
+        if digest is not None:
+            payload["sha256"] = digest
+    elif include_directory_files:
         try:
             entries = []
             for child in sorted(expanded.iterdir(), key=lambda item: item.name):
-                try:
-                    child_stat = child.stat()
-                except OSError:
-                    continue
-                entries.append(
-                    {
-                        "name": child.name,
-                        "kind": "dir" if child.is_dir() else "file",
-                        "mtime_ns": int(child_stat.st_mtime_ns),
-                        "size": int(child_stat.st_size),
-                    }
-                )
+                child_is_dir = child.is_dir()
+                entry = {
+                    "name": child.name,
+                    "kind": "dir" if child_is_dir else "file",
+                }
+                if not child_is_dir:
+                    digest = _file_sha256(child)
+                    if digest is not None:
+                        entry["sha256"] = digest
+                entries.append(entry)
             payload["entries"] = entries
         except OSError:
             pass
     return payload
+
+
+def _file_sha256(path: Path) -> str | None:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()

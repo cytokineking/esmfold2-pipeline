@@ -15,6 +15,40 @@ from esmfold2_pipeline.validation import ValidationPlanConfig, plan_validation_t
 
 
 class ValidationPlanningTest(unittest.TestCase):
+    def test_validation_config_hash_ignores_clone_dependent_mtimes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir) / "checkpoints"
+            checkpoint_dir.mkdir()
+            checkpoint = checkpoint_dir / "protenix-v2.pt"
+            checkpoint.write_bytes(b"checkpoint")
+
+            initial_hash = ValidationPlanConfig(
+                checkpoint_dir=checkpoint_dir,
+            ).validation_config_hash
+
+            checkpoint.touch()
+            checkpoint_dir.touch()
+            touched_hash = ValidationPlanConfig(
+                checkpoint_dir=checkpoint_dir,
+            ).validation_config_hash
+            self.assertEqual(initial_hash, touched_hash)
+
+            checkpoint.unlink()
+            checkpoint_dir.rmdir()
+            checkpoint_dir.mkdir()
+            checkpoint = checkpoint_dir / "protenix-v2.pt"
+            checkpoint.write_bytes(b"checkpoint")
+            recreated_hash = ValidationPlanConfig(
+                checkpoint_dir=checkpoint_dir,
+            ).validation_config_hash
+            self.assertEqual(initial_hash, recreated_hash)
+
+            checkpoint.write_bytes(b"CHECKPOINT")
+            changed_hash = ValidationPlanConfig(
+                checkpoint_dir=checkpoint_dir,
+            ).validation_config_hash
+            self.assertNotEqual(initial_hash, changed_hash)
+
     def test_validation_config_hash_includes_runtime_msa_and_filter_settings(self) -> None:
         base = ValidationPlanConfig(
             model_name="protenix-v2",
