@@ -13,6 +13,17 @@ Options:
   --esm-repo URL_OR_PATH   ESM git URL or local checkout. Default: https://github.com/Biohub/esm.git
   --esm-ref REF            Optional git ref to checkout for ESM.
   --python VERSION         Python version for uv. Default: 3.12
+  --transformers-source SPEC
+                           pip spec for the transformers build with ESMC/ESMFold2
+                           model support. Default: Biohub transformers fork.
+                           esm's own PyPI transformers pin predates that model
+                           code, so this is force-installed after esm.
+  --torch-backend cu128|cu130
+                           uv Torch index backend. Default: cu128, unless a
+                           Blackwell Ultra GPU (compute capability 10.3, e.g.
+                           B300/GB300) is detected via nvidia-smi, in which case
+                           cu130 is used (cu128's cuDNN attention kernels do not
+                           support that architecture).
   --preload-models LIST    Comma/space separated model aliases to download.
                            Default: cutoff2025,fast-cutoff2025
   --skip-model-preload     Do not pre-download model checkpoints.
@@ -43,6 +54,7 @@ Environment overrides:
   ESMFOLD2_ESM_REPO
   ESMFOLD2_ESM_REF
   ESMFOLD2_PYTHON_VERSION
+  ESMFOLD2_TRANSFORMERS_SOURCE
   ESMFOLD2_PRELOAD_MODELS
   ESMFOLD2_PROTENIX_SOURCE
   ESMFOLD2_PROTENIX_ENV
@@ -75,6 +87,8 @@ PREFIX="${ESMFOLD2_INSTALL_PREFIX:-$HOME/esmfold2}"
 ESM_SOURCE="${ESMFOLD2_ESM_REPO:-https://github.com/Biohub/esm.git}"
 ESM_REF="${ESMFOLD2_ESM_REF:-}"
 PYTHON_VERSION="${ESMFOLD2_PYTHON_VERSION:-3.12}"
+DEFAULT_TRANSFORMERS_SOURCE="git+https://github.com/Biohub/transformers.git@ef32577f55da19a4989cd7b22e004dc43a4998cb"
+TRANSFORMERS_SOURCE="${ESMFOLD2_TRANSFORMERS_SOURCE:-$DEFAULT_TRANSFORMERS_SOURCE}"
 PRELOAD_MODELS_RAW="${ESMFOLD2_PRELOAD_MODELS:-cutoff2025,fast-cutoff2025}"
 DEFAULT_PROTENIX_SOURCE="git+https://github.com/cytokineking/Protenix.git@2a4a6a516466fe3b1f830f515875da65ebcec049"
 PROTENIX_SOURCE="${ESMFOLD2_PROTENIX_SOURCE:-$DEFAULT_PROTENIX_SOURCE}"
@@ -85,18 +99,12 @@ DEFAULT_PROTENIX_CHECKPOINT_SHA256="8f931f9774a396b67033d0e58628e1834f4a1448165e
 PROTENIX_CHECKPOINT_URL="${ESMFOLD2_PROTENIX_CHECKPOINT_URL:-$DEFAULT_PROTENIX_CHECKPOINT_URL}"
 PROTENIX_CHECKPOINT_SHA256="${ESMFOLD2_PROTENIX_CHECKPOINT_SHA256:-$DEFAULT_PROTENIX_CHECKPOINT_SHA256}"
 TORCH_BACKEND="${ESMFOLD2_TORCH_BACKEND:-cu128}"
+TORCH_BACKEND_EXPLICIT=0
+[[ -n "${ESMFOLD2_TORCH_BACKEND:-}" ]] && TORCH_BACKEND_EXPLICIT=1
 PIPELINE_TORCH_SPEC="${ESMFOLD2_PIPELINE_TORCH_SPEC:-torch==2.11.0}"
 PROTENIX_TORCH_SPECS_RAW="${ESMFOLD2_PROTENIX_TORCH_SPECS:-torch==2.11.0,torchvision==0.26.0,torchaudio==2.11.0}"
 DOWNLOAD_PROTENIX_CHECKPOINT="${ESMFOLD2_DOWNLOAD_PROTENIX_CHECKPOINT:-1}"
-case "${TORCH_BACKEND}" in
-  cu128) DEFAULT_CUEQUIVARIANCE_OPS="cuequivariance-ops-torch-cu12" ;;
-  cu130) DEFAULT_CUEQUIVARIANCE_OPS="cuequivariance-ops-torch-cu13" ;;
-  *) die "ESMFOLD2_TORCH_BACKEND must be cu128 or cu130" ;;
-esac
 CUEQUIVARIANCE_VERSION="${ESMFOLD2_CUEQUIVARIANCE_VERSION:-0.10.0}"
-DEFAULT_CUEQUIVARIANCE_SPECS="cuequivariance==${CUEQUIVARIANCE_VERSION},cuequivariance-torch==${CUEQUIVARIANCE_VERSION},${DEFAULT_CUEQUIVARIANCE_OPS}==${CUEQUIVARIANCE_VERSION}"
-ACCELERATOR_SPECS_RAW="${ESMFOLD2_ACCELERATOR_SPECS:-xformers,${DEFAULT_CUEQUIVARIANCE_SPECS}}"
-PROTENIX_ACCELERATOR_SPECS_RAW="${ESMFOLD2_PROTENIX_ACCELERATOR_SPECS:-${DEFAULT_CUEQUIVARIANCE_SPECS}}"
 INSTALL_ACCELERATORS="${ESMFOLD2_INSTALL_ACCELERATORS:-1}"
 INSTALL_HMMER="${ESMFOLD2_INSTALL_HMMER:-1}"
 PRELOAD_MODELS=1
@@ -119,6 +127,15 @@ while [[ $# -gt 0 ]]; do
       ;;
     --python)
       PYTHON_VERSION="${2:-}"
+      shift 2
+      ;;
+    --transformers-source)
+      TRANSFORMERS_SOURCE="${2:-}"
+      shift 2
+      ;;
+    --torch-backend)
+      TORCH_BACKEND="${2:-}"
+      TORCH_BACKEND_EXPLICIT=1
       shift 2
       ;;
     --preload-models)
@@ -182,6 +199,22 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$TORCH_BACKEND_EXPLICIT" -ne 1 ]] && command -v nvidia-smi >/dev/null 2>&1; then
+  detected_caps="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | tr -d ' ')"
+  if printf '%s\n' "$detected_caps" | grep -qx '10.3'; then
+    TORCH_BACKEND=cu130
+    log "detected a Blackwell Ultra GPU (compute capability 10.3, e.g. B300/GB300); defaulting --torch-backend to cu130 (override with --torch-backend cu128)"
+  fi
+fi
+case "${TORCH_BACKEND}" in
+  cu128) DEFAULT_CUEQUIVARIANCE_OPS="cuequivariance-ops-torch-cu12" ;;
+  cu130) DEFAULT_CUEQUIVARIANCE_OPS="cuequivariance-ops-torch-cu13" ;;
+  *) die "--torch-backend/ESMFOLD2_TORCH_BACKEND must be cu128 or cu130" ;;
+esac
+DEFAULT_CUEQUIVARIANCE_SPECS="cuequivariance==${CUEQUIVARIANCE_VERSION},cuequivariance-torch==${CUEQUIVARIANCE_VERSION},${DEFAULT_CUEQUIVARIANCE_OPS}==${CUEQUIVARIANCE_VERSION}"
+ACCELERATOR_SPECS_RAW="${ESMFOLD2_ACCELERATOR_SPECS:-xformers,${DEFAULT_CUEQUIVARIANCE_SPECS}}"
+PROTENIX_ACCELERATOR_SPECS_RAW="${ESMFOLD2_PROTENIX_ACCELERATOR_SPECS:-${DEFAULT_CUEQUIVARIANCE_SPECS}}"
 
 [[ -n "$PREFIX" ]] || die "--prefix must not be empty"
 [[ -n "$PYTHON_VERSION" ]] || die "--python must not be empty"
@@ -267,6 +300,20 @@ download_protenix_checkpoint() {
   fi
 
   mv "$tmp_file" "$checkpoint_file"
+}
+
+verify_xformers_loads() {
+  uv run python -c "import xformers" >/dev/null 2>&1 || return 0
+  # Captured first, then grepped from the variable: piping `uv run` straight
+  # into `grep -q` can make uv's wrapper process see SIGPIPE (from grep
+  # closing early on match) and exit non-zero itself, which -o pipefail
+  # would then wrongly surface as "no match found".
+  local xformers_info
+  xformers_info="$(uv run python -m xformers.info 2>&1 || true)"
+  if grep -q "can't load C++/CUDA extensions" <<<"$xformers_info"; then
+    log "installed xformers build doesn't match this torch/CUDA/Python combination; removing it so attention falls back to PyTorch's native scaled_dot_product_attention"
+    uv pip uninstall xformers
+  fi
 }
 
 install_hmmer_if_needed() {
@@ -416,11 +463,19 @@ uv sync --python "$PYTHON_VERSION"
 log "installing ESM into the pipeline environment"
 uv pip install -e "$ESM_DIR" "${TORCH_RESOLUTION_ARGS[@]}"
 
+# esm's own transformers pin predates the ESMC/ESMFold2-experimental model
+# code this pipeline imports (transformers.models.esmc, .esmfold2), which only
+# exists in Biohub's transformers fork. Force it in after esm so esm's pin
+# cannot shadow it.
+log "installing transformers with ESMC/ESMFold2 model support: $TRANSFORMERS_SOURCE"
+uv pip install --force-reinstall "$TRANSFORMERS_SOURCE" "${TORCH_RESOLUTION_ARGS[@]}"
+
 if [[ "$INSTALL_ACCELERATORS" -eq 1 ]]; then
   log "installing ESMFold2 accelerator packages: $ACCELERATOR_SPECS_RAW"
   mapfile -t ACCELERATOR_SPECS < <(split_model_list "$ACCELERATOR_SPECS_RAW")
   uv pip install --upgrade "${ACCELERATOR_SPECS[@]}" \
     "${TORCH_RESOLUTION_ARGS[@]}"
+  verify_xformers_loads
 else
   log "skipping ESMFold2 accelerator packages (--no-accelerators)"
 fi
