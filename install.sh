@@ -327,25 +327,32 @@ install_hmmer_if_needed() {
     return
   fi
 
+  local install_failed=0
   if command -v apt-get >/dev/null 2>&1; then
     log "installing HMMER with apt-get"
     if [[ "$EUID" -eq 0 ]]; then
-      apt-get update
-      DEBIAN_FRONTEND=noninteractive apt-get install -y hmmer
+      apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y hmmer || install_failed=1
     elif command -v sudo >/dev/null 2>&1; then
-      sudo apt-get update
-      sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y hmmer
+      sudo apt-get update && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y hmmer \
+        || install_failed=1
     else
-      die "HMMER is missing and apt-get requires root; install hmmer or rerun with --no-hmmer"
+      log "warning: HMMER is missing and apt-get requires root; skipping"
+      install_failed=1
     fi
   elif command -v brew >/dev/null 2>&1; then
     log "installing HMMER with Homebrew"
-    brew install hmmer
+    brew install hmmer || install_failed=1
   else
-    die "HMMER is missing; install hmmer so hmmscan is on PATH or rerun with --no-hmmer"
+    log "warning: HMMER is missing and no supported package manager (apt-get/brew) was found; skipping"
+    install_failed=1
   fi
 
-  command -v hmmscan >/dev/null 2>&1 || die "HMMER install completed but hmmscan is not on PATH"
+  if [[ "$install_failed" -eq 1 ]] || ! command -v hmmscan >/dev/null 2>&1; then
+    log "warning: HMMER is not installed (hmmscan not on PATH); continuing without it." \
+      "VHH campaigns with validation.msa.use_msa: true will need hmmer installed manually" \
+      "before running MSA prefetch. Install it yourself (e.g. sudo apt-get install -y hmmer)" \
+      "or rerun with --no-hmmer to silence this warning."
+  fi
 }
 
 install_uv_if_needed() {
