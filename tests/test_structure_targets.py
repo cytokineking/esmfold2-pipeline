@@ -8,7 +8,7 @@ from pathlib import Path
 
 import biotite.structure.io.pdbx as pdbx
 
-from esmfold2_pipeline.config import check_campaign_config
+from esmfold2_pipeline.config import check_campaign_config, load_campaign_config
 from esmfold2_pipeline.planning import plan_campaign
 from esmfold2_pipeline.structure import (
     StructureTargetConfig,
@@ -667,6 +667,51 @@ output: {campaign_dir}
         self.assertEqual(chain.sequence, "GSTM")
         self.assertEqual(chain.sequence_source, "user_sequence")
         self.assertEqual(chain.representative_coord_mask, (True, False, False, True))
+
+    def test_planned_campaign_preserves_user_sequence_for_worker_reload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            pdb_path = root / "gapped.pdb"
+            _write_test_pdb(pdb_path, [("GLY", 1), ("MET", 4)])
+            campaign_dir = root / "campaign"
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                f"""
+target:
+  structure:
+    path: {pdb_path}
+    sequences:
+      A: GSTM
+  chains: [A]
+  conditioning:
+    mode: distogram
+binder:
+  scaffold: miniprotein
+campaign:
+  num_designs: 1
+  steps: 1
+output: {campaign_dir}
+""".lstrip()
+            )
+
+            check = check_campaign_config(config_path)
+            self.assertTrue(check.ok, check.errors)
+            plan_campaign(config_path)
+            resolved_path = campaign_dir / "resolved_config.yaml"
+            resolved_before = resolved_path.read_bytes()
+            worker_config = load_campaign_config(resolved_path)
+            assert worker_config.target_structure is not None
+            self.assertEqual(worker_config.target_structure.sequences, {"A": "GSTM"})
+            prepared = parse_structure_target(worker_config.target_structure)
+            self.assertEqual(prepared.chains[0].sequence, "GSTM")
+            self.assertEqual(
+                prepared.chains[0].representative_coord_mask,
+                (True, False, False, True),
+            )
+            # A resume must retain the existing campaign's semantic identity.
+            resumed = plan_campaign(config_path)
+            self.assertEqual(resumed.shard_count, 1)
+            self.assertEqual(resolved_path.read_bytes(), resolved_before)
 
     def test_hotspot_on_unresolved_template_residue_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

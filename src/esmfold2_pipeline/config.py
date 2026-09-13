@@ -1399,7 +1399,10 @@ def _parse_target_structure(
         chains=chains,
         structure_indexing=structure_indexing,
         sequences=_parse_structure_sequence_map(
-            structure_options.get("sequences", target.get("structure_sequences")),
+            structure_options.get(
+                "sequences",
+                target.get("structure_sequences", target.get("sequences")),
+            ),
             "target.structure.sequences",
         ),
         crop=_parse_selector_map(target.get("crop", structure_options.get("crop")), "target.crop"),
