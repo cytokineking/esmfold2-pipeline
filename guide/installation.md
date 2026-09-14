@@ -10,8 +10,8 @@ Use a CUDA-capable NVIDIA GPU. An 80 GB GPU is strongly recommended.
 
 Practical choices:
 
-- Recommended: H100 80 GB, H200, A100 80 GB, NVIDIA RTX PRO 6000 Blackwell, or
-  B200.
+- Recommended: H100 80 GB, H200, A100 80 GB, NVIDIA RTX PRO 6000 Blackwell,
+  B200, or B300/GB300.
 - The RTX PRO 6000 Blackwell is a strong, cost-effective choice — it outperforms
   the A100 and H100 on this workload.
 - scFv, VHH, and long target/binder complexes require more memory and run
@@ -20,8 +20,11 @@ Practical choices:
   single design across GPUs.
 
 **Validated configurations.** All of the GPUs above have been tested with
-**CUDA 12.8**. The Blackwell GPUs (RTX PRO 6000 Blackwell, B200) require CUDA
-12.8 or later.
+**CUDA 12.8**, except B300/GB300 ("Blackwell Ultra", compute capability
+10.3), which needs **CUDA 12.9+** — the `cu128` Torch build's cuDNN attention
+kernels do not support that architecture. `install.sh` detects a 10.3
+compute-capability GPU via `nvidia-smi` and switches its Torch backend to
+`cu130` automatically; pass `--torch-backend cu128|cu130` to override.
 
 Keep enough local disk for Hugging Face model cache files, the project
 environment, and campaign outputs. On a fresh H100 instance, the default
@@ -37,7 +40,9 @@ campaign outputs.
 - Python 3.12 recommended because the current ESM package is pinned to Python
   3.12.
 - NVIDIA driver with CUDA-capable GPU access. Validated with **CUDA 12.8**
-  (required for Blackwell GPUs such as the RTX PRO 6000 Blackwell and B200).
+  (required for Blackwell GPUs such as the RTX PRO 6000 Blackwell and B200);
+  B300/GB300 needs CUDA 12.9+ (`install.sh` selects this automatically, see
+  above).
 - `git` for cloning the repository.
 
 ## Install
@@ -94,6 +99,8 @@ cookbook tutorial design loop.
 ./install.sh --prefix /opt/esmfold2
 ./install.sh --esm-repo /path/to/existing/esm
 ./install.sh --esm-ref main
+./install.sh --torch-backend cu130
+./install.sh --transformers-source git+https://github.com/Biohub/transformers.git@main
 ./install.sh --preload-models cutoff2025,fast-cutoff2025
 ./install.sh --skip-model-preload
 ./install.sh --protenix-checkpoint-dir /path/to/protenix-checkpoints
@@ -114,6 +121,13 @@ The default accelerator package set is `xformers`, `cuequivariance`,
 `ESMFOLD2_ACCELERATOR_SPECS` to override that list, or `--no-accelerators` when
 installing on a system where those wheels are unavailable. `transformer-engine`
 and `flash-attn` remain system-specific optional installs.
+
+On very new GPU/Python/Torch combinations, the resolved `xformers` wheel can
+be built for a different Torch/Python ABI and fail to load its CUDA
+extensions at runtime. The installer checks for this after installing
+accelerators and, if the extensions don't load, uninstalls `xformers`
+automatically — design still runs, using PyTorch's native
+`scaled_dot_product_attention` instead of the fused kernel.
 
 ## First-run and preload behavior
 
