@@ -812,7 +812,14 @@ def _full_register_residues_for_chain(
         sequence_metadata=sequence_metadata,
     )
     if metadata_residues is not None:
-        residues = _overlay_observed_residues(metadata_residues, source_chain.residues)
+        # The PDB SEQRES path builds a complete register by aligning ATOM records
+        # to the full sequence, so its observed coordinates are already overlaid.
+        # mmCIF metadata registers are read independently and still need overlaying.
+        residues = (
+            metadata_residues
+            if input_format == "pdb"
+            else _overlay_observed_residues(metadata_residues, source_chain.residues)
+        )
         if user_sequence is not None:
             metadata_sequence = "".join(residue.sequence_1letter for residue in residues)
             if metadata_sequence != user_sequence:

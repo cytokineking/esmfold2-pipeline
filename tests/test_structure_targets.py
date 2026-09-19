@@ -649,6 +649,121 @@ output: {campaign_dir}
         self.assertEqual(chain.residues[3].auth_seq_id, "4")
         self.assertEqual(chain.residues[3].label_seq_id, "4")
 
+    def test_pdb_seqres_preserves_offset_author_numbering(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pdb_path = Path(tmpdir) / "seqres_offset.pdb"
+            residues = [
+                "VAL",
+                "VAL",
+                "VAL",
+                "GLY",
+                "ALA",
+                "VAL",
+                "GLY",
+                "VAL",
+                "GLY",
+                "LYS",
+            ]
+            _write_seqres_pdb(
+                pdb_path,
+                chain_id="A",
+                seqres=residues,
+                observed=[(residue, index) for index, residue in enumerate(residues, 7)],
+            )
+
+            prepared = parse_structure_target(
+                StructureTargetConfig(
+                    path=pdb_path,
+                    chains=("A",),
+                    sequences={"A": "VVVGAVGVGK"},
+                    structure_indexing="auth_seq_id",
+                    crop={"A": ("7-16",)},
+                    hotspots={"A": ("7", "16")},
+                    conditioning_mode="distogram",
+                )
+            )
+
+        chain = prepared.chains[0]
+        self.assertEqual(chain.sequence, "VVVGAVGVGK")
+        self.assertEqual(chain.hotspot_indices, (0, 9))
+        self.assertEqual(
+            tuple(residue.auth_seq_id for residue in chain.residues),
+            tuple(str(index) for index in range(7, 17)),
+        )
+        self.assertEqual(
+            tuple(residue.label_seq_id for residue in chain.residues),
+            tuple(str(index) for index in range(1, 11)),
+        )
+        self.assertTrue(all(chain.representative_coord_mask))
+
+    def test_plan_reload_preserves_seqres_leading_and_internal_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            pdb_path = root / "seqres_gaps_offset.pdb"
+            _write_seqres_pdb(
+                pdb_path,
+                chain_id="A",
+                seqres=["ALA", "CYS", "ASP", "GLU", "PHE", "GLY"],
+                observed=[("ASP", 7), ("GLU", 8), ("GLY", 10)],
+            )
+            campaign_dir = root / "campaign"
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                f"""
+target:
+  structure:
+    path: {pdb_path}
+    sequences:
+      A: ACDEFG
+  chains: [A]
+  structure_indexing: label_seq_id
+  crop:
+    A: [2-6]
+  hotspots:
+    A: [3]
+  conditioning:
+    mode: distogram
+binder:
+  scaffold: miniprotein
+campaign:
+  num_designs: 1
+  steps: 1
+output: {campaign_dir}
+""".lstrip()
+            )
+
+            checked = check_campaign_config(config_path)
+            self.assertTrue(checked.ok, checked.errors)
+            assert checked.prepared_target is not None
+            planned_chain = checked.prepared_target.chains[0]
+            self.assertEqual(planned_chain.sequence, "CDEFG")
+            self.assertEqual(
+                planned_chain.representative_coord_mask,
+                (False, True, True, False, True),
+            )
+            self.assertEqual(planned_chain.hotspot_indices, (1,))
+
+            plan_campaign(config_path)
+            worker_config = load_campaign_config(campaign_dir / "resolved_config.yaml")
+            assert worker_config.target_structure is not None
+            reloaded = parse_structure_target(worker_config.target_structure)
+
+        reloaded_chain = reloaded.chains[0]
+        self.assertEqual(reloaded_chain.sequence, planned_chain.sequence)
+        self.assertEqual(
+            reloaded_chain.representative_coord_mask,
+            planned_chain.representative_coord_mask,
+        )
+        self.assertEqual(reloaded_chain.hotspot_indices, planned_chain.hotspot_indices)
+        self.assertEqual(
+            tuple(residue.auth_seq_id for residue in reloaded_chain.residues),
+            ("2", "7", "8", "5", "10"),
+        )
+        self.assertEqual(
+            tuple(residue.label_seq_id for residue in reloaded_chain.residues),
+            ("2", "3", "4", "5", "6"),
+        )
+
     def test_user_sequence_preserves_discontinuous_pdb_register(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             pdb_path = Path(tmpdir) / "gapped_with_sequence.pdb"
