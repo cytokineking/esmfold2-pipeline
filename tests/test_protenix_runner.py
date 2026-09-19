@@ -432,7 +432,10 @@ class ProtenixRunnerTest(unittest.TestCase):
 
                 task_metrics = json.loads(task["metrics_json"])
                 self.assertEqual(task_metrics["validation_global_iptm"], 0.99)
-                self.assertEqual(task_metrics["validation_metric_scope"], "binder_target")
+                self.assertEqual(
+                    task_metrics["validation_metric_scope"],
+                    "logical_binder_target",
+                )
                 self.assertEqual(
                     task_metrics["validation_chain_role_map"],
                     {"binder": ["A"], "target": ["B"]},
@@ -449,14 +452,16 @@ class ProtenixRunnerTest(unittest.TestCase):
                     [row["status"] for row in structures],
                     ["passing", "rejected"],
                 )
-                self.assertEqual(
+                for actual, expected in zip(
                     [row["scoped_iptm"] for row in structures],
                     [0.82, 0.21],
-                )
-                self.assertEqual(
+                ):
+                    self.assertAlmostEqual(actual, expected)
+                for actual, expected in zip(
                     [row["scoped_ipsae"] for row in structures],
                     [0.61, 0.12],
-                )
+                ):
+                    self.assertAlmostEqual(actual, expected)
                 for row in structures:
                     self.assertTrue((campaign_dir / row["structure_path"]).exists())
                     self.assertNotIn("/.staging/", row["structure_path"])
@@ -727,21 +732,29 @@ class ProtenixRunnerTest(unittest.TestCase):
             try:
                 task = conn.execute("SELECT * FROM validation_tasks").fetchone()
                 self.assertEqual(task["status"], "completed")
-                self.assertAlmostEqual(task["ipsae"], 0.73)
+                self.assertAlmostEqual(task["ipsae"], 0.2124891624)
                 metrics = json.loads(task["metrics_json"])
-                self.assertAlmostEqual(metrics["validation_ipSAE"], 0.73)
-                self.assertAlmostEqual(metrics["validation_ipSAE_min"], 0.35)
-                self.assertAlmostEqual(metrics["validation_ipSAE_max"], 0.45)
-                self.assertEqual(metrics["validation_ipSAE_source_key"], "ipsae.py")
+                self.assertAlmostEqual(metrics["validation_ipSAE"], 0.2124891624)
+                self.assertAlmostEqual(metrics["validation_ipSAE_min"], 0.1070804217)
+                self.assertAlmostEqual(metrics["validation_ipSAE_max"], 0.2124891624)
+                self.assertEqual(
+                    metrics["validation_ipSAE_source_key"],
+                    "token_pair_pae",
+                )
                 self.assertEqual(metrics["validation_ipSAE_adapter"], "ipsae.py")
-                self.assertAlmostEqual(metrics["validation_ipSAE_d0chn"], 0.55)
-                self.assertAlmostEqual(metrics["validation_pDockQ2"], 0.67)
-                self.assertNotIn("validation_ipSAE_fallback", metrics)
+                self.assertAlmostEqual(
+                    metrics["validation_ipSAE_pair_adapter_metrics"]["ipSAE_d0chn"],
+                    0.55,
+                )
+                self.assertAlmostEqual(
+                    metrics["validation_ipSAE_pair_adapter_metrics"]["pDockQ2"],
+                    0.67,
+                )
 
                 structure = conn.execute(
                     "SELECT scoped_ipsae, metrics_json FROM validation_structures"
                 ).fetchone()
-                self.assertAlmostEqual(structure["scoped_ipsae"], 0.73)
+                self.assertAlmostEqual(structure["scoped_ipsae"], 0.2124891624)
                 structure_metrics = json.loads(structure["metrics_json"])
                 self.assertEqual(
                     structure_metrics["validation_ipSAE_pairs"][0]["binder_chain"],
@@ -786,9 +799,9 @@ class ProtenixRunnerTest(unittest.TestCase):
             try:
                 task = conn.execute("SELECT status, ipsae, metrics_json FROM validation_tasks").fetchone()
                 self.assertEqual(task["status"], "completed")
-                self.assertAlmostEqual(task["ipsae"], 0.73)
+                self.assertAlmostEqual(task["ipsae"], 0.2124891624)
                 metrics = json.loads(task["metrics_json"])
-                self.assertAlmostEqual(metrics["validation_ipSAE"], 0.73)
+                self.assertAlmostEqual(metrics["validation_ipSAE"], 0.2124891624)
                 self.assertEqual(metrics["validation_ipSAE_adapter"], "ipsae.py")
                 self.assertNotIn("validation_ipSAE_adapter_error", metrics)
             finally:
@@ -823,7 +836,7 @@ class ProtenixRunnerTest(unittest.TestCase):
                     "SELECT status, ipsae, output_structure_path, metrics_json FROM validation_tasks"
                 ).fetchone()
                 self.assertEqual(task["status"], "completed")
-                self.assertIsNone(task["ipsae"])
+                self.assertAlmostEqual(task["ipsae"], 0.2124891624)
                 self.assertTrue(
                     task["output_structure_path"].startswith(
                         "validation/protenix_v2/structures/passing/"
@@ -832,17 +845,14 @@ class ProtenixRunnerTest(unittest.TestCase):
                 metrics = json.loads(task["metrics_json"])
                 self.assertTrue(metrics["validation_passed"])
                 self.assertIn("validation_ipSAE_adapter_error", metrics)
-                self.assertEqual(
-                    metrics["validation_ipSAE_warning"],
-                    "missing scoped binder-target validation_ipSAE",
-                )
+                self.assertAlmostEqual(metrics["validation_ipSAE"], 0.2124891624)
                 self.assertNotIn("fail_reason", metrics)
 
                 structure = conn.execute(
                     "SELECT status, scoped_ipsae, metrics_json FROM validation_structures"
                 ).fetchone()
                 self.assertEqual(structure["status"], "passing")
-                self.assertIsNone(structure["scoped_ipsae"])
+                self.assertAlmostEqual(structure["scoped_ipsae"], 0.2124891624)
             finally:
                 conn.close()
 
@@ -882,7 +892,7 @@ class ProtenixRunnerTest(unittest.TestCase):
                     "SELECT status, ipsae, output_structure_path, metrics_json FROM validation_tasks"
                 ).fetchone()
                 self.assertEqual(task["status"], "completed")
-                self.assertIsNone(task["ipsae"])
+                self.assertAlmostEqual(task["ipsae"], 0.2124891624)
                 self.assertTrue(
                     task["output_structure_path"].startswith(
                         "validation/protenix_v2/structures/rejected/"
@@ -893,7 +903,7 @@ class ProtenixRunnerTest(unittest.TestCase):
                 self.assertFalse(metrics["validation_ipSAE_pass"])
                 self.assertEqual(metrics["min_validation_ipSAE"], 0.60)
                 self.assertIn(
-                    "missing scoped binder-target validation_ipSAE",
+                    "validation_ipSAE 0.2125 below threshold 0.6000",
                     metrics["fail_reason"],
                 )
             finally:
@@ -1059,7 +1069,7 @@ class ProtenixRunnerTest(unittest.TestCase):
                 metrics = json.loads(task["metrics_json"])
                 self.assertEqual(metrics["validation_global_iptm"], 0.99)
                 self.assertNotIn("validation_iptm", metrics)
-                self.assertIn("missing scoped binder-target", metrics["fail_reason"])
+                self.assertIn("missing logical binder-target", metrics["fail_reason"])
 
                 structure = conn.execute("SELECT * FROM validation_structures").fetchone()
                 self.assertEqual(structure["status"], "rejected")
@@ -1431,6 +1441,7 @@ def _write_fake_protenix(root: Path, *, missing_scoped_iptm: bool) -> Path:
         f"""
 import argparse
 import json
+import math
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
@@ -1473,8 +1484,19 @@ for sample in samples:
         (pred_dir / f"{{name}}_summary_confidence_sample_{{rank}}.json").write_text(
             json.dumps(summary)
         )
+        d0 = max(1.0, 1.24 * (27 - 15) ** (1.0 / 3.0) - 1.8)
+        pae = d0 * math.sqrt(1.0 / ipsae - 1.0)
+        full_data = {{
+            "token_pair_pae": [[0.0, pae], [pae, 0.0]],
+            "atom_plddt": [0.9, 0.9],
+            "token_asym_id": [0, 1],
+            "token_has_frame": [True, True],
+        }}
+        if {str(not missing_scoped_iptm)}:
+            full_data["token_pair_tm_expected"] = [[0.0, iptm], [iptm, 0.0]]
+            full_data["token_pair_tm_normalization_count"] = 2
         (pred_dir / f"{{name}}_full_data_sample_{{rank}}.json").write_text(
-            json.dumps({{"token_pair_pae": [[1.0]], "atom_plddt": [0.9]}})
+            json.dumps(full_data)
         )
         (pred_dir / f"{{name}}_sample_{{rank}}.cif").write_text(
             "data_fake\\n#\\n"
@@ -1511,6 +1533,7 @@ def _write_fake_ipsae_threshold_protenix(root: Path) -> Path:
         """
 import argparse
 import json
+import math
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
@@ -1552,7 +1575,16 @@ for sample in samples:
         (pred_dir / f"{name}_summary_confidence_sample_{rank}.json").write_text(
             json.dumps(summary)
         )
-        (pred_dir / f"{name}_full_data_sample_{rank}.json").write_text("{}")
+        d0 = max(1.0, 1.24 * (27 - 15) ** (1.0 / 3.0) - 1.8)
+        pae = d0 * math.sqrt(1.0 / ipsae - 1.0)
+        (pred_dir / f"{name}_full_data_sample_{rank}.json").write_text(json.dumps({
+            "token_pair_pae": [[0.0, pae], [pae, 0.0]],
+            "atom_plddt": [0.9, 0.9],
+            "token_asym_id": [0, 1],
+            "token_has_frame": [True, True],
+            "token_pair_tm_expected": [[0.0, iptm], [iptm, 0.0]],
+            "token_pair_tm_normalization_count": 2,
+        }))
         (pred_dir / f"{name}_sample_{rank}.cif").write_text("data_fake\\n#\\n")
 """.lstrip()
     )
@@ -1597,7 +1629,14 @@ for sample in samples:
         json.dumps(summary)
     )
     (pred_dir / f"{name}_full_data_sample_0.json").write_text(
-        json.dumps({"token_pair_pae": [[1.0, 2.0], [3.0, 4.0]], "atom_plddt": [0.9, 0.8]})
+        json.dumps({
+            "token_pair_pae": [[1.0, 2.0], [3.0, 4.0]],
+            "atom_plddt": [0.9, 0.8],
+            "token_asym_id": [0, 1],
+            "token_has_frame": [True, True],
+            "token_pair_tm_expected": [[0.0, 0.82], [0.82, 0.0]],
+            "token_pair_tm_normalization_count": 2,
+        })
     )
     (pred_dir / f"{name}_sample_0.cif").write_text("data_fake\\n#\\n")
 """.lstrip()
@@ -1656,6 +1695,7 @@ def _write_fake_hotspot_protenix(root: Path) -> Path:
         """
 import argparse
 import json
+import math
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
@@ -1699,7 +1739,16 @@ for sample in samples:
         (pred_dir / f"{name}_summary_confidence_sample_{rank}.json").write_text(
             json.dumps(summary)
         )
-        (pred_dir / f"{name}_full_data_sample_{rank}.json").write_text("{}")
+        d0 = max(1.0, 1.24 * (27 - 15) ** (1.0 / 3.0) - 1.8)
+        pae = d0 * math.sqrt(1.0 / ipsae - 1.0)
+        (pred_dir / f"{name}_full_data_sample_{rank}.json").write_text(json.dumps({
+            "token_pair_pae": [[0.0, pae], [pae, 0.0]],
+            "atom_plddt": [0.9, 0.9],
+            "token_asym_id": [0, 1],
+            "token_has_frame": [True, True],
+            "token_pair_tm_expected": [[0.0, iptm], [iptm, 0.0]],
+            "token_pair_tm_normalization_count": 2,
+        }))
         (pred_dir / f"{name}_sample_{rank}.cif").write_text(
             f'''data_fake
 loop_

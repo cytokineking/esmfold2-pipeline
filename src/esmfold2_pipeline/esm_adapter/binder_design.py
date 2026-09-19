@@ -67,6 +67,11 @@ from esmfold2_pipeline.validation import (
     compute_fold_target_geometry_region_metrics,
     experimental_representative_coords,
 )
+from esmfold2_pipeline.validation.logical_scoring import (
+    LOGICAL_IPTM_AGGREGATION,
+    LOGICAL_METRIC_SCOPE,
+    logical_iptm_from_pae_logits,
+)
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -1978,6 +1983,9 @@ def _extract_metrics(result: dict[str, Any], *, steps: int) -> dict[str, float |
     metrics: dict[str, float | int | str | None] = {"steps": steps}
     for key in (
         "iptm",
+        "iptm_scope",
+        "iptm_aggregation",
+        "complex_iptm",
         "ptm",
         "plddt",
         "distogram_iptm_proxy",
@@ -2113,35 +2121,43 @@ def _binder_target_iptm_metrics_from_capture(
     *,
     complex_iptm: Any,
 ) -> dict[str, Any]:
-    """Scope iPTM to binder-target chain pairs when ESMFold2 exposes pair scores."""
+    """Return logical-role iPTM plus legacy physical-chain diagnostics."""
 
     metrics: dict[str, Any] = {}
-    raw_complex_iptm = _to_scalar(complex_iptm)
+    raw_complex_iptm = _to_scalar(fold_result.get("complex_iptm"))
+    if raw_complex_iptm is None:
+        raw_complex_iptm = _to_scalar(complex_iptm)
     if raw_complex_iptm is not None:
         metrics["complex_iptm"] = raw_complex_iptm
+
+    logical_iptm = _to_scalar(fold_result.get("binder_target_iptm"))
+    if logical_iptm is not None:
+        metrics.update(
+            {
+                "iptm": logical_iptm,
+                "iptm_scope": LOGICAL_METRIC_SCOPE,
+                "iptm_aggregation": LOGICAL_IPTM_AGGREGATION,
+                "binder_target_iptm": logical_iptm,
+                "binder_target_iptm_source_key": "pae_logits",
+            }
+        )
 
     pair_chains_iptm = fold_result.get("pair_chains_iptm")
     if pair_chains_iptm is None:
         output = fold_result.get("output") or {}
         pair_chains_iptm = output.get("pair_chains_iptm")
     if pair_chains_iptm is None:
-        if raw_complex_iptm is not None:
-            metrics["iptm_scope"] = "complex"
         return metrics
 
     matrix = _to_numpy_array(pair_chains_iptm).astype(float)
     if matrix.ndim == 3:
         matrix = matrix[0]
     if matrix.ndim != 2:
-        if raw_complex_iptm is not None:
-            metrics["iptm_scope"] = "complex"
         return metrics
 
     target_chains = list(structure_target.chains)
     binder_index = len(target_chains)
     if matrix.shape[0] <= binder_index or matrix.shape[1] <= binder_index:
-        if raw_complex_iptm is not None:
-            metrics["iptm_scope"] = "complex"
         return metrics
 
     by_chain: dict[str, float] = {}
@@ -2163,8 +2179,6 @@ def _binder_target_iptm_metrics_from_capture(
         weighted_values.append((value, len(chain.residues)))
 
     if not weighted_values:
-        if raw_complex_iptm is not None:
-            metrics["iptm_scope"] = "complex"
         return metrics
 
     total_weight = sum(weight for _value, weight in weighted_values)
@@ -2176,14 +2190,53 @@ def _binder_target_iptm_metrics_from_capture(
     )
     metrics.update(
         {
-            "iptm": float(binder_target_iptm),
-            "iptm_scope": "binder_target",
-            "binder_target_iptm": float(binder_target_iptm),
-            "binder_target_iptm_unweighted": binder_target_iptm_unweighted,
+            "binder_target_chain_pair_iptm": float(binder_target_iptm),
+            "binder_target_chain_pair_iptm_unweighted": binder_target_iptm_unweighted,
             "binder_target_iptm_by_chain": by_chain,
         }
     )
     return metrics
+
+
+def _apply_logical_binder_target_iptm(
+    result: dict[str, Any],
+    *,
+    target_length: int,
+    binder_length: int,
+) -> None:
+    """Replace selection iPTM with native-logit scoring across logical roles."""
+
+    output = result.get("output") or {}
+    pae_logits = output.get("pae_logits")
+    if pae_logits is None:
+        raise ValueError(
+            "ESMFold2 confidence output is missing pae_logits required for logical "
+            "binder-target iPTM"
+        )
+    inputs = result.get("inputs") or {}
+    valid_token_mask = inputs.get("token_attention_mask")
+    if valid_token_mask is None:
+        raise ValueError(
+            "ESMFold2 inputs are missing token_attention_mask required for logical "
+            "binder-target iPTM"
+        )
+    total_length = target_length + binder_length
+    if total_length <= 0:
+        raise ValueError("logical binder-target iPTM requires non-empty roles")
+    binder_mask = np.zeros(total_length, dtype=bool)
+    binder_mask[target_length:] = True
+    target_mask = ~binder_mask
+    scores = logical_iptm_from_pae_logits(
+        pae_logits,
+        binder_mask=binder_mask,
+        target_mask=target_mask,
+        valid_token_mask=valid_token_mask[..., :total_length],
+    )
+    result["complex_iptm"] = output.get("iptm")
+    result["iptm"] = scores
+    result["binder_target_iptm"] = scores
+    result["iptm_scope"] = LOGICAL_METRIC_SCOPE
+    result["iptm_aggregation"] = LOGICAL_IPTM_AGGREGATION
 
 
 def _to_scalar(value: Any) -> float | int | str | None:
@@ -2915,9 +2968,13 @@ def _fold_and_get_distogram_for_sequence_target(
         result.update(
             {
                 "ptm": output.get("ptm"),
-                "iptm": output.get("iptm"),
                 "plddt": output.get("plddt"),
             }
+        )
+        _apply_logical_binder_target_iptm(
+            result,
+            target_length=len(target_seq.replace("|", "")),
+            binder_length=len(designed_sequences[0]),
         )
     return result
 
@@ -3045,10 +3102,14 @@ def _fold_and_get_distogram_for_structure_target(
         result.update(
             {
                 "ptm": output.get("ptm"),
-                "iptm": output.get("iptm"),
                 "pair_chains_iptm": output.get("pair_chains_iptm"),
                 "plddt": output.get("plddt"),
             }
+        )
+        _apply_logical_binder_target_iptm(
+            result,
+            target_length=target_length,
+            binder_length=binder_length,
         )
     return result
 

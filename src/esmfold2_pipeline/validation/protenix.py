@@ -31,6 +31,14 @@ from esmfold2_pipeline.validation.hotspots import (
     score_validation_hotspots,
     validation_hotspot_context,
 )
+from esmfold2_pipeline.validation.logical_scoring import (
+    LOGICAL_IPSAE_AGGREGATION,
+    LOGICAL_IPTM_AGGREGATION,
+    LOGICAL_METRIC_SCOPE,
+    logical_cross_role_tm_score,
+    logical_ipsae_from_pae,
+    logical_role_masks,
+)
 from esmfold2_pipeline.validation.msa import (
     DEFAULT_MSA_PAIRING_STRATEGY,
     BinderMsaMode,
@@ -659,6 +667,11 @@ def collect_protenix_structures(
         seeds=config.seeds,
     ):
         summary = _load_json(summary_path)
+        full_data = _load_json(full_data_path)
+        iptm, iptm_details = _logical_iptm_metric_from_full_data(
+            full_data,
+            chain_role_map=chain_role_map,
+        )
         ipsae, ipsae_details = _scoped_ipsae_metric_for_outputs(
             summary,
             summary_path=summary_path,
@@ -672,6 +685,8 @@ def collect_protenix_structures(
             chain_role_map=chain_role_map,
             min_validation_iptm=config.min_validation_iptm,
             min_validation_ipsae=config.min_validation_ipsae,
+            iptm=iptm,
+            iptm_details=iptm_details,
             ipsae=ipsae,
             ipsae_details=ipsae_details,
         )
@@ -694,7 +709,9 @@ def collect_protenix_structures(
                     **metrics,
                     "validation_model": task.model_name,
                     "validation_chain_role_map": chain_role_map,
-                    "validation_metric_scope": "binder_target",
+                    "validation_metric_scope": LOGICAL_METRIC_SCOPE,
+                    "validation_iptm_aggregation": LOGICAL_IPTM_AGGREGATION,
+                    "validation_ipSAE_aggregation": LOGICAL_IPSAE_AGGREGATION,
                     "source_summary_path": str(summary_path),
                     "source_cif_path": str(cif_path),
                     "binder_scaffold": task.binder_scaffold,
@@ -749,6 +766,78 @@ def scoped_pair_metric(
         "mean": sum(values) / len(values),
         "pairs": pairs,
     }
+
+
+def _logical_role_masks_from_full_data(
+    full_data: dict[str, Any],
+    *,
+    chain_role_map: dict[str, Sequence[str]],
+) -> tuple[Any, Any, Any]:
+    token_asym_ids_raw = full_data.get("token_asym_id")
+    token_has_frame_raw = full_data.get("token_has_frame")
+    if token_asym_ids_raw is None or token_has_frame_raw is None:
+        raise ValueError("missing token_asym_id or token_has_frame in Protenix full_data")
+    token_asym_ids = [int(value) for value in token_asym_ids_raw]
+    source_valid = [bool(value) for value in token_has_frame_raw]
+    if len(token_asym_ids) != len(source_valid):
+        raise ValueError("Protenix token_asym_id and token_has_frame lengths differ")
+    asym_id_to_chain_id = {
+        asym_id: _chain_id_for_index(asym_id) for asym_id in set(token_asym_ids)
+    }
+    binder_mask, target_mask = logical_role_masks(
+        token_asym_ids,
+        asym_id_to_chain_id=asym_id_to_chain_id,
+        chain_role_map=chain_role_map,
+    )
+    return binder_mask, target_mask, source_valid
+
+
+def _logical_iptm_metric_from_full_data(
+    full_data: dict[str, Any],
+    *,
+    chain_role_map: dict[str, Sequence[str]],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    details: dict[str, Any] = {}
+    expected_tm = full_data.get("token_pair_tm_expected")
+    if expected_tm is None:
+        details["validation_iptm_error"] = (
+            "missing token_pair_tm_expected in Protenix full_data"
+        )
+        return None, details
+    try:
+        binder_mask, target_mask, source_valid = _logical_role_masks_from_full_data(
+            full_data,
+            chain_role_map=chain_role_map,
+        )
+        normalization_count = full_data.get("token_pair_tm_normalization_count")
+        if normalization_count is None:
+            raise ValueError("missing token_pair_tm_normalization_count")
+        expected_count = len(source_valid)
+        if int(normalization_count) != expected_count:
+            raise ValueError(
+                "token_pair_tm_normalization_count does not match token count: "
+                f"{normalization_count} != {expected_count}"
+            )
+        if any(source_valid):
+            value = logical_cross_role_tm_score(
+                expected_tm,
+                binder_mask=binder_mask,
+                target_mask=target_mask,
+                source_valid_mask=source_valid,
+                denominator_epsilon=1e-8,
+            )
+        else:
+            value = 0.0
+    except (TypeError, ValueError) as exc:
+        details["validation_iptm_error"] = f"logical binder-target iPTM failed: {exc}"
+        return None, details
+    return (
+        {
+            "source_key": "token_pair_tm_expected",
+            "value": float(value),
+        },
+        details,
+    )
 
 
 def _fetch_task_inputs(
@@ -1439,6 +1528,33 @@ def _scoped_ipsae_metric_for_outputs(
     config: ProtenixRunnerConfig,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     details: dict[str, Any] = {}
+    try:
+        full_data = _load_json(full_data_path)
+        binder_mask, target_mask, _source_valid = _logical_role_masks_from_full_data(
+            full_data,
+            chain_role_map=chain_role_map,
+        )
+        logical_metric = logical_ipsae_from_pae(
+            full_data.get("token_pair_pae"),
+            binder_mask=binder_mask,
+            target_mask=target_mask,
+            pae_cutoff=config.ipsae_pae_cutoff,
+        )
+    except (TypeError, ValueError) as exc:
+        details["validation_ipSAE_error"] = (
+            f"logical binder-target ipSAE failed: {exc}"
+        )
+        return None, details
+
+    metric: dict[str, Any] = {
+        **logical_metric,
+        "source_key": "token_pair_pae",
+        "pairs": [],
+        "adapter_metrics": {
+            "ipSAE_best_direction": logical_metric["best_direction"],
+            "ipSAE_directional_values": logical_metric["directional_values"],
+        },
+    }
     adapter_result = _run_ipsae_adapter(
         summary_path=summary_path,
         full_data_path=full_data_path,
@@ -1452,7 +1568,13 @@ def _scoped_ipsae_metric_for_outputs(
         adapter_metric = _ipsae_metric_from_adapter_result(adapter_result)
         if adapter_metric is not None:
             details["validation_ipSAE_adapter"] = "ipsae.py"
-            return adapter_metric, details
+            metric["pairs"] = adapter_metric.get("pairs", [])
+            details["validation_ipSAE_pair_source_key"] = adapter_metric.get(
+                "source_key"
+            )
+            details["validation_ipSAE_pair_adapter_metrics"] = adapter_metric.get(
+                "adapter_metrics", {}
+            )
 
     summary_metric = scoped_pair_metric(
         summary,
@@ -1460,10 +1582,12 @@ def _scoped_ipsae_metric_for_outputs(
         chain_role_map=chain_role_map,
     )
     if summary_metric is not None:
-        if "validation_ipSAE_adapter_error" in details:
-            details["validation_ipSAE_fallback"] = "summary_chain_pair"
-        return summary_metric, details
-    return None, details
+        if not metric["pairs"]:
+            metric["pairs"] = summary_metric.get("pairs", [])
+            details["validation_ipSAE_pair_source_key"] = summary_metric.get(
+                "source_key"
+            )
+    return metric, details
 
 
 def _run_ipsae_adapter(
@@ -1713,10 +1837,12 @@ def _validation_metrics_from_summary(
     chain_role_map: dict[str, list[str]],
     min_validation_iptm: float | None,
     min_validation_ipsae: float | None,
+    iptm: dict[str, Any] | None = None,
+    iptm_details: dict[str, Any] | None = None,
     ipsae: dict[str, Any] | None = None,
     ipsae_details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    iptm = scoped_pair_metric(
+    pair_iptm = scoped_pair_metric(
         summary,
         keys=("chain_pair_iptm", "chain_pair_ipTM", "chain_pair_interface_iptm"),
         chain_role_map=chain_role_map,
@@ -1728,17 +1854,26 @@ def _validation_metrics_from_summary(
         "ranking_score": _float_or_none(summary.get("ranking_score")),
     }
     fail_reasons: list[str] = []
+    if iptm_details:
+        metrics.update(iptm_details)
     if iptm is None:
-        fail_reasons.append("missing scoped binder-target chain_pair_iptm")
+        fail_reasons.append("missing logical binder-target native iPTM")
     else:
         metrics.update(
             {
                 "validation_iptm": iptm["value"],
-                "validation_iptm_min": iptm["min"],
-                "validation_iptm_max": iptm["max"],
-                "validation_iptm_mean": iptm["mean"],
-                "validation_iptm_pairs": iptm["pairs"],
                 "validation_iptm_source_key": iptm["source_key"],
+                "validation_iptm_aggregation": LOGICAL_IPTM_AGGREGATION,
+            }
+        )
+    if pair_iptm is not None:
+        metrics.update(
+            {
+                "validation_iptm_pairs": pair_iptm["pairs"],
+                "validation_iptm_pair_min": pair_iptm["min"],
+                "validation_iptm_pair_max": pair_iptm["max"],
+                "validation_iptm_pair_mean": pair_iptm["mean"],
+                "validation_iptm_pair_source_key": pair_iptm["source_key"],
             }
         )
 
@@ -1766,6 +1901,7 @@ def _validation_metrics_from_summary(
                 "validation_ipSAE_mean": ipsae.get("mean"),
                 "validation_ipSAE_pairs": ipsae.get("pairs", []),
                 "validation_ipSAE_source_key": ipsae["source_key"],
+                "validation_ipSAE_aggregation": LOGICAL_IPSAE_AGGREGATION,
             }
         )
 

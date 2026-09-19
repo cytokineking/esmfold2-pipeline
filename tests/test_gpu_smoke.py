@@ -2477,6 +2477,7 @@ class GPUSmokeTest(unittest.TestCase):
         metrics = adapter_module._binder_target_iptm_metrics_from_capture(
             structure_target,
             {
+                "binder_target_iptm": np.array([0.77], dtype=np.float32),
                 "pair_chains_iptm": np.array(
                     [
                         [
@@ -2491,14 +2492,15 @@ class GPUSmokeTest(unittest.TestCase):
             complex_iptm=0.95,
         )
 
-        self.assertEqual(metrics["iptm_scope"], "binder_target")
+        self.assertEqual(metrics["iptm_scope"], "logical_binder_target")
         self.assertEqual(metrics["complex_iptm"], 0.95)
         self.assertAlmostEqual(metrics["binder_target_iptm_by_chain"]["A"], 0.2)
         self.assertAlmostEqual(metrics["binder_target_iptm_by_chain"]["C"], 0.7)
-        self.assertAlmostEqual(metrics["binder_target_iptm"], 0.45)
-        self.assertAlmostEqual(metrics["iptm"], 0.45)
+        self.assertAlmostEqual(metrics["binder_target_chain_pair_iptm"], 0.45)
+        self.assertAlmostEqual(metrics["binder_target_iptm"], 0.77)
+        self.assertAlmostEqual(metrics["iptm"], 0.77)
 
-    def test_binder_target_iptm_falls_back_to_complex_scope_when_pair_scores_missing(
+    def test_binder_target_iptm_does_not_fall_back_when_native_grouped_score_missing(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2518,7 +2520,7 @@ class GPUSmokeTest(unittest.TestCase):
             complex_iptm=0.95,
         )
 
-        self.assertEqual(metrics, {"complex_iptm": 0.95, "iptm_scope": "complex"})
+        self.assertEqual(metrics, {"complex_iptm": 0.95})
 
     def test_multichain_hotspot_metrics_include_per_chain_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

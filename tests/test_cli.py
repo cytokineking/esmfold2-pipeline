@@ -2475,6 +2475,7 @@ def _write_cli_fake_protenix(root: Path) -> Path:
         """
 import argparse
 import json
+import math
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
@@ -2507,7 +2508,16 @@ for sample in samples:
     (pred_dir / f"{name}_summary_confidence_sample_0.json").write_text(
         json.dumps(summary)
     )
-    (pred_dir / f"{name}_full_data_sample_0.json").write_text("{}")
+    d0 = max(1.0, 1.24 * (27 - 15) ** (1.0 / 3.0) - 1.8)
+    pae = d0 * math.sqrt(1.0 / 0.61 - 1.0)
+    (pred_dir / f"{name}_full_data_sample_0.json").write_text(json.dumps({
+        "token_pair_pae": [[0.0, pae], [pae, 0.0]],
+        "atom_plddt": [0.9, 0.9],
+        "token_asym_id": [0, 1],
+        "token_has_frame": [True, True],
+        "token_pair_tm_expected": [[0.0, 0.82], [0.82, 0.0]],
+        "token_pair_tm_normalization_count": 2,
+    }))
     (pred_dir / f"{name}_sample_0.cif").write_text("data_fake\\n#\\n")
 """.lstrip()
     )

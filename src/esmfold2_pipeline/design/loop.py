@@ -371,6 +371,12 @@ def run_gradient_design_loop(
                         batch_index,
                     ),
                     "iptm": iptm,
+                    "iptm_scope": final_fold.get("iptm_scope"),
+                    "iptm_aggregation": final_fold.get("iptm_aggregation"),
+                    "complex_iptm": _loss_item(
+                        final_fold.get("complex_iptm"),
+                        batch_index,
+                    ),
                     "logits": logits[batch_index].detach().cpu(),
                     **iptm_proxy_scores,
                 }
