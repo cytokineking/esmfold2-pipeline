@@ -62,7 +62,7 @@ def test_installer_pins_protenix_and_selects_its_accelerator_backend() -> None:
 
     assert (
         "git+https://github.com/cytokineking/Protenix.git@"
-        "2a4a6a516466fe3b1f830f515875da65ebcec049"
+        "723125a4f6c9ba01411488a6699f3a4ccaeb102e"
     ) in script
     assert (
         'CUEQUIVARIANCE_VERSION="${ESMFOLD2_CUEQUIVARIANCE_VERSION:-0.10.0}"'
