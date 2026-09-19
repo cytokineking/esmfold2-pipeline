@@ -58,6 +58,33 @@ class LogicalScoringTests(unittest.TestCase):
 
                 self.assertTrue(torch.allclose(actual, reference, atol=1e-7, rtol=1e-6))
 
+    def test_esmfold2_rejects_invalid_roles_but_allows_unassigned_padding(self) -> None:
+        import torch
+
+        logits = torch.zeros(1, 3, 3, 8)
+        with self.assertRaisesRegex(ValueError, "disjoint"):
+            logical_iptm_from_pae_logits(
+                logits,
+                binder_mask=[True, True, False],
+                target_mask=[True, False, True],
+                valid_token_mask=[True, True, False],
+            )
+        with self.assertRaisesRegex(ValueError, "every valid token"):
+            logical_iptm_from_pae_logits(
+                logits,
+                binder_mask=[True, False, False],
+                target_mask=[False, True, False],
+                valid_token_mask=[True, True, True],
+            )
+
+        score = logical_iptm_from_pae_logits(
+            logits,
+            binder_mask=[True, False, False],
+            target_mask=[False, True, False],
+            valid_token_mask=[True, True, False],
+        )
+        self.assertEqual(score.shape, (1,))
+
     def test_native_cross_role_row_reduction_ignores_same_role_nonfinite_values(self) -> None:
         expected_tm = np.array(
             [

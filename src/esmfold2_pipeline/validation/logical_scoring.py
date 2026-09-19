@@ -163,14 +163,14 @@ def logical_iptm_from_pae_logits(
         or not bool(target.any().item())
     ):
         raise ValueError("logical binder and target masks must be non-empty and disjoint")
-    if not bool((binder | target).all().item()):
-        raise ValueError("every scored token must have a logical binder or target role")
-
     valid = torch.as_tensor(valid_token_mask, dtype=torch.bool, device=logits.device)
     if valid.ndim == 1:
         valid = valid.unsqueeze(0).expand(batch_size, -1)
     if valid.shape != (batch_size, length):
         raise ValueError("valid_token_mask must have shape [token] or [batch, token]")
+    unassigned = ~(binder | target)
+    if bool((valid & unassigned[None, :]).any().item()):
+        raise ValueError("every valid token must have a logical binder or target role")
 
     num_bins = logits.shape[-1]
     bin_width = 32.0 / num_bins
