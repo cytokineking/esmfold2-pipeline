@@ -249,6 +249,14 @@ RANKING_DIAGNOSTIC_FIELDS = [
     "pareto_front",
     "rmsd_pass",
     *[field for field in VALIDATION_MANIFEST_FIELDS if field != "validation_rank"],
+    "validation_metric_scope",
+    "validation_iptm_aggregation",
+    "validation_ipSAE_aggregation",
+    "validation_iptm_source_key",
+    "validation_ipSAE_source_key",
+    "validation_iptm_pairs",
+    "validation_ipSAE_pairs",
+    "validation_chain_role_map",
     "copied_esmfold2_structure",
     "copied_validator_structure",
 ]
@@ -1657,6 +1665,24 @@ def _validation_task_row(row: sqlite3.Row, *, root: Path) -> dict[str, Any]:
         ),
         "validator_global_iptm": validation_metrics.get("validation_global_iptm"),
         "validator_metric_scope": validation_metrics.get("validation_metric_scope"),
+        "validation_metric_scope": validation_metrics.get("validation_metric_scope"),
+        "validation_iptm_aggregation": validation_metrics.get(
+            "validation_iptm_aggregation"
+        ),
+        "validation_ipSAE_aggregation": validation_metrics.get(
+            "validation_ipSAE_aggregation"
+        ),
+        "validation_iptm_source_key": validation_metrics.get(
+            "validation_iptm_source_key"
+        ),
+        "validation_ipSAE_source_key": validation_metrics.get(
+            "validation_ipSAE_source_key"
+        ),
+        "validation_iptm_pairs": validation_metrics.get("validation_iptm_pairs"),
+        "validation_ipSAE_pairs": validation_metrics.get("validation_ipSAE_pairs"),
+        "validation_chain_role_map": validation_metrics.get(
+            "validation_chain_role_map"
+        ),
         "validator_hotspot_pass": _hotspot_pass(validation_hotspot),
         "validator_hotspot_distance_angstrom": _validation_hotspot_distance(
             validation_metrics
@@ -2978,6 +3004,8 @@ def _csv_value(value: Any) -> Any:
         return int(value)
     if isinstance(value, Real):
         return _format_float(float(value))
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
     if isinstance(value, str):
         stripped = value.strip()
         if stripped.startswith("'") and _looks_like_float(stripped[1:]):

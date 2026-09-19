@@ -150,6 +150,47 @@ class ValidationReportTest(unittest.TestCase):
             run_mock_validation(campaign_dir)
             long_candidate_id = "target_" + ("long_candidate_" * 8) + "seed0"
             with sqlite3.connect(campaign_dir / "campaign.sqlite") as conn:
+                validation_id, raw_metrics = conn.execute(
+                    "SELECT validation_id, metrics_json FROM validation_tasks"
+                ).fetchone()
+                validation_metrics = json.loads(raw_metrics)
+                validation_metrics.update(
+                    {
+                        "best_structure_id": "seed000_sample0",
+                        "validation_metric_scope": "logical_binder_target",
+                        "validation_iptm_aggregation": (
+                            "native_expected_tm_cross_role_source_row_max"
+                        ),
+                        "validation_ipSAE_aggregation": (
+                            "native_ipsae_cross_role_directional_max"
+                        ),
+                        "validation_iptm_source_key": "chain_pair_iptm",
+                        "validation_ipSAE_source_key": "ipsae.py",
+                        "validation_iptm_pairs": [
+                            {
+                                "binder_chain": "A",
+                                "target_chain": "B",
+                                "value": 0.8,
+                                "directional_values": [0.8, 0.79],
+                            }
+                        ],
+                        "validation_ipSAE_pairs": [
+                            {
+                                "binder_chain": "A",
+                                "target_chain": "B",
+                                "ipSAE": 0.6,
+                            }
+                        ],
+                        "validation_chain_role_map": {
+                            "binder": ["A"],
+                            "target": ["B"],
+                        },
+                    }
+                )
+                conn.execute(
+                    "UPDATE validation_tasks SET metrics_json = ? WHERE validation_id = ?",
+                    (json.dumps(validation_metrics), validation_id),
+                )
                 conn.execute("PRAGMA foreign_keys = OFF")
                 for table in (
                     "candidates",
@@ -226,6 +267,42 @@ class ValidationReportTest(unittest.TestCase):
             self.assertEqual(
                 diagnostic_rows[0]["validator_model"],
                 MOCK_VALIDATION_MODEL,
+            )
+            self.assertEqual(diagnostic_rows[0]["validation_id"], validation_id)
+            self.assertEqual(
+                diagnostic_rows[0]["best_structure_id"],
+                "seed000_sample0",
+            )
+            self.assertEqual(
+                diagnostic_rows[0]["validation_metric_scope"],
+                "logical_binder_target",
+            )
+            self.assertEqual(
+                diagnostic_rows[0]["validation_iptm_aggregation"],
+                "native_expected_tm_cross_role_source_row_max",
+            )
+            self.assertEqual(
+                diagnostic_rows[0]["validation_ipSAE_aggregation"],
+                "native_ipsae_cross_role_directional_max",
+            )
+            self.assertEqual(
+                json.loads(diagnostic_rows[0]["validation_iptm_pairs"])[0],
+                {
+                    "binder_chain": "A",
+                    "target_chain": "B",
+                    "value": 0.8,
+                    "directional_values": [0.8, 0.79],
+                },
+            )
+            self.assertEqual(
+                json.loads(diagnostic_rows[0]["validation_ipSAE_pairs"])[0][
+                    "ipSAE"
+                ],
+                0.6,
+            )
+            self.assertEqual(
+                json.loads(diagnostic_rows[0]["validation_chain_role_map"]),
+                {"binder": ["A"], "target": ["B"]},
             )
             self.assertEqual(
                 diagnostic_rows[0]["copied_esmfold2_structure"],
