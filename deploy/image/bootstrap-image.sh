@@ -224,6 +224,8 @@ cat >> "${PREFIX}/env.sh" <<EOF
 export CUDA_HOME=${CUDA_TOOLKIT_ROOT}
 export PATH=${CUDA_TOOLKIT_ROOT}/bin:\$PATH
 export LD_LIBRARY_PATH=${CUDA_TOOLKIT_ROOT}/lib64:${CUDA_TOOLKIT_ROOT}/targets/x86_64-linux/lib:\${LD_LIBRARY_PATH:-}
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 EOF
 
 ln -sfn "${CHECKOUT}/.venv/bin/esmfold2-pipeline" /usr/local/bin/esmfold2-pipeline

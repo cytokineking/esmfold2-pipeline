@@ -22,6 +22,8 @@ if [[ "${1:-}" == "--full" ]]; then RUN_MODALITY_SMOKES=1; shift; fi
 if [[ $# -ne 0 ]]; then echo "usage: qualify-image.sh [--full]" >&2; exit 2; fi
 
 source "${PREFIX}/env.sh"
+test "${HF_HUB_OFFLINE:-}" = 1
+test "${TRANSFORMERS_OFFLINE:-}" = 1
 test -x "${CUDA_HOME}/bin/nvcc"
 test -f "${CUDA_HOME}/targets/x86_64-linux/include/cusparse.h"
 executable="${CHECKOUT}/.venv/bin/esmfold2-pipeline"
@@ -66,6 +68,8 @@ jq -e '
   .model_bytes > 0
 ' "${image_manifest}" >/dev/null
 test "$("${CHECKOUT}/.venv/bin/python" -c 'import torch; print(torch.version.cuda or "unknown")')" = "$(jq -r '.cuda_runtime' "${image_manifest}")"
+test "$("${CHECKOUT}/.venv/bin/python" -c 'import importlib.metadata; print(importlib.metadata.version("transformers"))')" = "4.57.6"
+test "$(jq -r '.esm_commit' "${image_manifest}")" = "ba4d7124864eed323a93bf3cfefcd958f573b75a"
 test "$("${PROTENIX_PYTHON}" -c 'import torch; print(torch.version.cuda or "unknown")')" = "$(jq -r '.protenix_cuda_runtime' "${image_manifest}")"
 accelerator_backend="$(jq -r '.accelerator_backend' "${image_manifest}")"
 cuequivariance_version="$(jq -r '.cuequivariance_version' "${image_manifest}")"
@@ -202,6 +206,47 @@ if [[ -n "${REMOTE_BASE}" ]]; then
 fi
 
 rm -rf "${OUTPUT_ROOT}/gpu-smoke"
+"${CHECKOUT}/.venv/bin/python" - <<'PY'
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from esmfold2_pipeline.structure import StructureTargetConfig, parse_structure_target
+
+residues = ["VAL", "VAL", "VAL", "GLY", "ALA", "VAL", "GLY", "VAL", "GLY", "LYS"]
+with TemporaryDirectory() as tmpdir:
+    path = Path(tmpdir) / "offset-seqres.pdb"
+    lines = [f"SEQRES{1:4d} A{len(residues):5d}  {' '.join(residues)}\n"]
+    serial = 1
+    for offset, (residue, residue_id) in enumerate(zip(residues, range(7, 17))):
+        atoms = [("N", 0.0, 0.0), ("CA", 1.0, 0.0), ("C", 2.0, 0.0), ("O", 2.5, 0.5)]
+        if residue != "GLY":
+            atoms.append(("CB", 1.0, 1.0))
+        for atom_name, dx, dy in atoms:
+            element = atom_name[0]
+            lines.append(
+                f"ATOM  {serial:5d} {atom_name:^4} {residue:>3} A{residue_id:4d} "
+                f"   {offset * 9.0 + dx:8.3f}{dy:8.3f}{0.0:8.3f}"
+                f"  1.00 20.00          {element:>2s}\n"
+            )
+            serial += 1
+    path.write_text("".join(lines))
+    prepared = parse_structure_target(
+        StructureTargetConfig(
+            path=path,
+            chains=("A",),
+            sequences={"A": "VVVGAVGVGK"},
+            structure_indexing="auth_seq_id",
+            crop={"A": ("7-16",)},
+            hotspots={"A": ("7", "16")},
+            conditioning_mode="distogram",
+        )
+    )
+chain = prepared.chains[0]
+assert chain.sequence == "VVVGAVGVGK"
+assert chain.hotspot_indices == (0, 9)
+assert tuple(residue.auth_seq_id for residue in chain.residues) == tuple(map(str, range(7, 17)))
+assert tuple(residue.label_seq_id for residue in chain.residues) == tuple(map(str, range(1, 11)))
+PY
 "${executable}" check-env --esm-repo "${ESM_REPO}"
 "${executable}" check-protenix --protenix-python "${PROTENIX_PYTHON}" --protenix-checkpoint-dir "${PROTENIX_CHECKPOINT_DIR}"
 while IFS= read -r model; do

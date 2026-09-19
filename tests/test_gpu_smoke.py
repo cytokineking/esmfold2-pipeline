@@ -6,7 +6,8 @@ import unittest
 from dataclasses import dataclass, replace
 import os
 from pathlib import Path
-from unittest.mock import patch
+import sys
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -73,6 +74,33 @@ class FakeDesignApp:
 class GPUSmokeTest(unittest.TestCase):
     def setUp(self) -> None:
         adapter_module._LOCAL_DESIGN_RUNTIME_CACHE.clear()
+        self._resolve_esmc_snapshot = adapter_module._resolve_esmc_snapshot
+        snapshot_patcher = patch.object(
+            adapter_module,
+            "_resolve_esmc_snapshot",
+            return_value="/cache/esmc-6b-qualified",
+        )
+        snapshot_patcher.start()
+        self.addCleanup(snapshot_patcher.stop)
+
+    def test_esmc_snapshot_resolution_uses_qualified_revision_offline(self) -> None:
+        snapshot_download = Mock(return_value="/cache/qualified-esmc")
+        fake_huggingface_hub = types.SimpleNamespace(
+            snapshot_download=snapshot_download
+        )
+        with patch.dict(sys.modules, {"huggingface_hub": fake_huggingface_hub}), patch.dict(
+            os.environ,
+            {"HF_HUB_OFFLINE": "1"},
+            clear=True,
+        ):
+            resolved = self._resolve_esmc_snapshot()
+
+        self.assertEqual(resolved, "/cache/qualified-esmc")
+        snapshot_download.assert_called_once_with(
+            repo_id="biohub/ESMC-6B",
+            revision="45b0fa5d7fb06faefbd5e3b89bdcef35d564e79a",
+            local_files_only=True,
+        )
 
     def _runtime_cache_test_spec(self, *, gpu_id: str = "0"):
         return adapter_module._build_design_spec(
@@ -217,6 +245,7 @@ class GPUSmokeTest(unittest.TestCase):
     def test_local_runtime_loader_uses_model_apis_without_design_app(self) -> None:
         fold_from_pretrained_calls: list[tuple[str, bool]] = []
         esmc_from_pretrained_calls: list[tuple[str, object]] = []
+        esmc_encoder_from_pretrained_calls: list[str] = []
         fold_instances: list[object] = []
 
         class FakeFoldModel:
@@ -231,6 +260,7 @@ class GPUSmokeTest(unittest.TestCase):
                 self.eval_called = False
                 self.requires_grad_calls: list[bool] = []
                 self._esmc = None
+                self.device = "cpu"
                 fold_instances.append(self)
 
             def load_esmc(self, esmc_id: str) -> None:
@@ -268,7 +298,7 @@ class GPUSmokeTest(unittest.TestCase):
                 fold_from_pretrained_calls.append((repo_id, load_esmc))
                 return FakeFoldModel(repo_id, load_esmc)
 
-        class FakeESMCModel:
+        class FakeMaskedLMModel:
             def __init__(self) -> None:
                 self.cuda_called = False
                 self.eval_called = False
@@ -288,12 +318,48 @@ class GPUSmokeTest(unittest.TestCase):
 
         class FakeESMCForMaskedLM:
             @staticmethod
-            def from_pretrained(repo_id: str, *, torch_dtype):
+            def from_pretrained(repo_id: str, *, torch_dtype, output_loading_info: bool):
                 esmc_from_pretrained_calls.append((repo_id, torch_dtype))
-                return FakeESMCModel()
+                assert output_loading_info is True
+                return FakeMaskedLMModel(), {
+                    "missing_keys": [],
+                    "unexpected_keys": [],
+                    "mismatched_keys": [],
+                    "error_msgs": [],
+                }
+
+        class FakeESMCEncoder:
+            def __init__(self) -> None:
+                self.bfloat16_called = False
+                self.to_devices: list[str] = []
+                self.eval_called = False
+
+            @classmethod
+            def from_pretrained(cls, repo_id: str, *, output_loading_info: bool):
+                esmc_encoder_from_pretrained_calls.append(repo_id)
+                assert output_loading_info is True
+                return cls(), {
+                    "missing_keys": [],
+                    "unexpected_keys": ["lm_head.0.weight", "esmc.layer._extra_state"],
+                    "mismatched_keys": [],
+                    "error_msgs": [],
+                }
+
+            def bfloat16(self):
+                self.bfloat16_called = True
+                return self
+
+            def to(self, device: str):
+                self.to_devices.append(device)
+                return self
+
+            def eval(self):
+                self.eval_called = True
+                return self
 
         fake_module = types.SimpleNamespace(
             ESMFold2ExperimentalModel=FakeFoldModelApi,
+            ESMCModel=FakeESMCEncoder,
             ESMCForMaskedLM=FakeESMCForMaskedLM,
             torch=types.SimpleNamespace(float32="float32"),
             CUE_AVAILABLE=True,
@@ -316,14 +382,18 @@ class GPUSmokeTest(unittest.TestCase):
         )
         self.assertEqual(
             esmc_from_pretrained_calls,
-            [("biohub/ESMC-6B", "float32")],
+            [("/cache/esmc-6b-qualified", "float32")],
+        )
+        self.assertEqual(
+            esmc_encoder_from_pretrained_calls,
+            ["/cache/esmc-6b-qualified"],
         )
         self.assertEqual(list(runtime.inversion_models), ["inv-model"])
         self.assertEqual(list(runtime.critic_models), ["critic-model"])
-        self.assertIsInstance(runtime.esmc_model, FakeESMCModel)
+        self.assertIsInstance(runtime.esmc_model, FakeMaskedLMModel)
         self.assertEqual(
             [instance.loaded_esmc_ids for instance in fold_instances],
-            [["biohub/inv-model:esmc"], []],
+            [[], []],
         )
         self.assertIs(fold_instances[1]._esmc, fold_instances[0]._esmc)
         self.assertEqual(fold_instances[0].dropout_calls, [(0.5, True)])
@@ -344,6 +414,48 @@ class GPUSmokeTest(unittest.TestCase):
         self.assertTrue(runtime.esmc_model.cuda_called)
         self.assertTrue(runtime.esmc_model.eval_called)
         self.assertEqual(runtime.esmc_model.requires_grad_calls, [False])
+
+    def test_required_pretrained_weights_reject_missing_core_parameters(self) -> None:
+        class IncompleteModel:
+            @classmethod
+            def from_pretrained(cls, model_path: str, *, output_loading_info: bool):
+                assert output_loading_info is True
+                return object(), {
+                    "missing_keys": ["esmc.transformer.blocks.0.attn.layernorm_q.weight"],
+                    "unexpected_keys": [],
+                    "mismatched_keys": [],
+                    "error_msgs": [],
+                }
+
+        with self.assertRaisesRegex(RuntimeError, "missing_keys=.*layernorm_q"):
+            adapter_module._load_pretrained_with_required_weights(
+                IncompleteModel,
+                "/cache/esmc",
+            )
+
+    def test_required_pretrained_weights_only_allows_declared_unused_keys(self) -> None:
+        class ModelWithUnexpectedKeys:
+            @classmethod
+            def from_pretrained(cls, model_path: str, *, output_loading_info: bool):
+                assert output_loading_info is True
+                return object(), {
+                    "missing_keys": [],
+                    "unexpected_keys": ["lm_head.0.weight", "esmc.block._extra_state"],
+                    "mismatched_keys": [],
+                    "error_msgs": [],
+                }
+
+        model = adapter_module._load_pretrained_with_required_weights(
+            ModelWithUnexpectedKeys,
+            "/cache/esmc",
+            allowed_unexpected_key_prefixes=("lm_head.",),
+        )
+        self.assertIsNotNone(model)
+        with self.assertRaisesRegex(RuntimeError, "unexpected_keys=.*lm_head"):
+            adapter_module._load_pretrained_with_required_weights(
+                ModelWithUnexpectedKeys,
+                "/cache/esmc",
+            )
 
     def test_local_design_runtime_cache_reuses_worker_models(self) -> None:
         loaded_runtime = object()
@@ -439,6 +551,7 @@ class GPUSmokeTest(unittest.TestCase):
             def __init__(self) -> None:
                 self.config = types.SimpleNamespace(esmc_id="esmc")
                 self._esmc = None
+                self.device = "cpu"
 
             @classmethod
             def from_pretrained(cls, repo_id: str, *, load_esmc: bool):
@@ -466,6 +579,21 @@ class GPUSmokeTest(unittest.TestCase):
                 return self
 
         class FakeESMCModel:
+            @classmethod
+            def from_pretrained(cls, repo_id: str, *, output_loading_info: bool):
+                return cls(), {
+                    "missing_keys": [],
+                    "unexpected_keys": [],
+                    "mismatched_keys": [],
+                    "error_msgs": [],
+                }
+
+            def bfloat16(self):
+                return self
+
+            def to(self, device: str):
+                return self
+
             def cuda(self):
                 return self
 
@@ -477,11 +605,17 @@ class GPUSmokeTest(unittest.TestCase):
 
         class FakeESMCForMaskedLM:
             @staticmethod
-            def from_pretrained(repo_id: str, *, torch_dtype):
-                return FakeESMCModel()
+            def from_pretrained(repo_id: str, *, torch_dtype, output_loading_info: bool):
+                return FakeESMCModel(), {
+                    "missing_keys": [],
+                    "unexpected_keys": [],
+                    "mismatched_keys": [],
+                    "error_msgs": [],
+                }
 
         fake_module = types.SimpleNamespace(
             ESMFold2ExperimentalModel=FakeFoldModel,
+            ESMCModel=FakeESMCModel,
             ESMCForMaskedLM=FakeESMCForMaskedLM,
             torch=types.SimpleNamespace(float32="float32"),
             CUE_AVAILABLE=False,
@@ -513,6 +647,7 @@ class GPUSmokeTest(unittest.TestCase):
             def __init__(self) -> None:
                 self.config = types.SimpleNamespace(esmc_id="esmc")
                 self._esmc = None
+                self.device = "cpu"
 
             @classmethod
             def from_pretrained(cls, repo_id: str, *, load_esmc: bool):
@@ -538,6 +673,21 @@ class GPUSmokeTest(unittest.TestCase):
                 return self
 
         class FakeESMCModel:
+            @classmethod
+            def from_pretrained(cls, repo_id: str, *, output_loading_info: bool):
+                return cls(), {
+                    "missing_keys": [],
+                    "unexpected_keys": [],
+                    "mismatched_keys": [],
+                    "error_msgs": [],
+                }
+
+            def bfloat16(self):
+                return self
+
+            def to(self, device: str):
+                return self
+
             def cuda(self):
                 return self
 
@@ -549,11 +699,17 @@ class GPUSmokeTest(unittest.TestCase):
 
         class FakeESMCForMaskedLM:
             @staticmethod
-            def from_pretrained(repo_id: str, *, torch_dtype):
-                return FakeESMCModel()
+            def from_pretrained(repo_id: str, *, torch_dtype, output_loading_info: bool):
+                return FakeESMCModel(), {
+                    "missing_keys": [],
+                    "unexpected_keys": [],
+                    "mismatched_keys": [],
+                    "error_msgs": [],
+                }
 
         fake_module = types.SimpleNamespace(
             ESMFold2ExperimentalModel=FakeFoldModel,
+            ESMCModel=FakeESMCModel,
             ESMCForMaskedLM=FakeESMCForMaskedLM,
             torch=types.SimpleNamespace(float32="float32"),
             CUE_AVAILABLE=False,

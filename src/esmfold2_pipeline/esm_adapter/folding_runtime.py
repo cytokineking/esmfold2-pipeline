@@ -59,6 +59,7 @@ class ESMFoldingRuntime:
     optim: Any
     seed_context: Any
     ESMCTokenizer: Any
+    ESMCModel: Any
     ESMCForMaskedLM: Any
     ESMFold2ExperimentalModel: Any
     CUE_AVAILABLE: bool
@@ -181,7 +182,10 @@ def load_esm_folding_runtime(esm_repo: str | Path | None = None) -> ESMFoldingRu
     import torch  # type: ignore
     import torch.nn.functional as functional  # type: ignore
     import torch.optim as optim  # type: ignore
-    from transformers.models.esmc.modeling_esmc import ESMCForMaskedLM  # type: ignore
+    from transformers.models.esmc.modeling_esmc import (  # type: ignore
+        ESMCForMaskedLM,
+        ESMCModel,
+    )
     from transformers.models.esmc.tokenization_esmc import ESMCTokenizer  # type: ignore
     from transformers.models.esmfold2.modeling_esmfold2_common import (  # type: ignore
         CUE_AVAILABLE,
@@ -220,6 +224,7 @@ def load_esm_folding_runtime(esm_repo: str | Path | None = None) -> ESMFoldingRu
         optim=optim,
         seed_context=seed_context,
         ESMCTokenizer=ESMCTokenizer,
+        ESMCModel=ESMCModel,
         ESMCForMaskedLM=ESMCForMaskedLM,
         ESMFold2ExperimentalModel=ESMFold2ExperimentalModel,
         CUE_AVAILABLE=bool(CUE_AVAILABLE),

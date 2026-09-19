@@ -11,7 +11,7 @@ Usage:
 Options:
   --prefix DIR             Install root. Default: $HOME/esmfold2
   --esm-repo URL_OR_PATH   ESM git URL or local checkout. Default: https://github.com/Biohub/esm.git
-  --esm-ref REF            Optional git ref to checkout for ESM.
+  --esm-ref REF            Git ref to checkout for ESM. Default: qualified commit.
   --python VERSION         Python version for uv. Default: 3.12
   --preload-models LIST    Comma/space separated model aliases to download.
                            Default: cutoff2025,fast-cutoff2025
@@ -42,6 +42,7 @@ Environment overrides:
   ESMFOLD2_INSTALL_PREFIX
   ESMFOLD2_ESM_REPO
   ESMFOLD2_ESM_REF
+  ESMFOLD2_TRANSFORMERS_SOURCE
   ESMFOLD2_PYTHON_VERSION
   ESMFOLD2_PRELOAD_MODELS
   ESMFOLD2_PROTENIX_SOURCE
@@ -73,7 +74,10 @@ die() {
 
 PREFIX="${ESMFOLD2_INSTALL_PREFIX:-$HOME/esmfold2}"
 ESM_SOURCE="${ESMFOLD2_ESM_REPO:-https://github.com/Biohub/esm.git}"
-ESM_REF="${ESMFOLD2_ESM_REF:-}"
+DEFAULT_ESM_REF="ba4d7124864eed323a93bf3cfefcd958f573b75a"
+ESM_REF="${ESMFOLD2_ESM_REF:-$DEFAULT_ESM_REF}"
+DEFAULT_TRANSFORMERS_SOURCE="git+https://github.com/EvolutionaryScale/transformers.git@ef32577f55da19a4989cd7b22e004dc43a4998cb"
+TRANSFORMERS_SOURCE="${ESMFOLD2_TRANSFORMERS_SOURCE:-$DEFAULT_TRANSFORMERS_SOURCE}"
 PYTHON_VERSION="${ESMFOLD2_PYTHON_VERSION:-3.12}"
 PRELOAD_MODELS_RAW="${ESMFOLD2_PRELOAD_MODELS:-cutoff2025,fast-cutoff2025}"
 DEFAULT_PROTENIX_SOURCE="git+https://github.com/cytokineking/Protenix.git@2a4a6a516466fe3b1f830f515875da65ebcec049"
@@ -400,11 +404,14 @@ fi
 cd "$PIPELINE_DIR"
 
 TORCH_CONSTRAINTS="$(mktemp)"
-trap 'rm -f "$TORCH_CONSTRAINTS"' EXIT
+TRANSFORMERS_OVERRIDE="$(mktemp)"
+trap 'rm -f "$TORCH_CONSTRAINTS" "$TRANSFORMERS_OVERRIDE"' EXIT
 write_torch_constraints "$TORCH_CONSTRAINTS"
+printf '%s\n' "$TRANSFORMERS_SOURCE" > "$TRANSFORMERS_OVERRIDE"
 TORCH_RESOLUTION_ARGS=(
   --torch-backend "$TORCH_BACKEND"
   --constraints "$TORCH_CONSTRAINTS"
+  --overrides "$TRANSFORMERS_OVERRIDE"
 )
 
 log "installing Python $PYTHON_VERSION with uv if needed"
@@ -415,6 +422,12 @@ uv sync --python "$PYTHON_VERSION"
 
 log "installing ESM into the pipeline environment"
 uv pip install -e "$ESM_DIR" "${TORCH_RESOLUTION_ARGS[@]}"
+
+# ESM declares the moving Biohub Transformers main branch. Reinstall the
+# qualified source commit after ESM so its ESMC module namespace matches the
+# preloaded ESMC checkpoint used by the worker.
+log "installing qualified ESM Transformers runtime"
+uv pip install --reinstall "$TRANSFORMERS_SOURCE" "${TORCH_RESOLUTION_ARGS[@]}"
 
 if [[ "$INSTALL_ACCELERATORS" -eq 1 ]]; then
   log "installing ESMFold2 accelerator packages: $ACCELERATOR_SPECS_RAW"

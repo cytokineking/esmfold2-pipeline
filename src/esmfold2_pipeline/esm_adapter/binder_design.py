@@ -82,6 +82,9 @@ _LOCAL_INVERSION_LM_DROPOUT = 0.5
 _LOCAL_CRITIC_LM_DROPOUT = 0.25
 _LOCAL_MODEL_DEVICE = "cuda"
 _LOCAL_MODEL_CACHE_ESMC = True
+_ESMC_REPO_ID = "biohub/ESMC-6B"
+_ESMC_REVISION = "45b0fa5d7fb06faefbd5e3b89bdcef35d564e79a"
+_ESMC_BASE_ALLOWED_UNEXPECTED_KEY_PREFIXES = ("lm_head.",)
 
 
 @dataclass(frozen=True)
@@ -1550,6 +1553,7 @@ def _load_local_runtime_models(
     inversion_model_name: str,
     critic_name: str,
 ) -> RuntimeModels:
+    esmc_snapshot = _resolve_esmc_snapshot()
     inversion_spec, critic_spec = _local_model_load_specs(
         inversion_model_name=inversion_model_name,
         critic_name=critic_name,
@@ -1564,6 +1568,7 @@ def _load_local_runtime_models(
                 lm_dropout=model_spec.lm_dropout,
                 cache_esmc=model_spec.cache_esmc,
                 device=model_spec.device,
+                esmc_snapshot=esmc_snapshot,
             )
         return loaded_models[model_spec]
 
@@ -1585,8 +1590,9 @@ def _load_local_runtime_models(
             compile_model(model)
             compiled_model_ids.add(model_id)
 
-    esmc_model = binder_design.ESMCForMaskedLM.from_pretrained(
-        "biohub/ESMC-6B",
+    esmc_model = _load_pretrained_with_required_weights(
+        binder_design.ESMCForMaskedLM,
+        esmc_snapshot,
         torch_dtype=binder_design.torch.float32,
     )
     esmc_model = esmc_model.cuda().eval().requires_grad_(False)
@@ -1688,20 +1694,28 @@ def _load_local_hf_esmfold2_model(
     lm_dropout: float,
     cache_esmc: bool,
     device: str,
+    esmc_snapshot: str,
 ):
     global _LOCAL_ESMC_CACHE
 
     repo_id = f"biohub/{model_name}"
     model = binder_design.ESMFold2ExperimentalModel.from_pretrained(
         repo_id,
-        load_esmc=not cache_esmc,
+        load_esmc=False,
     )
-    if cache_esmc:
-        if _LOCAL_ESMC_CACHE is None:
-            model.load_esmc(model.config.esmc_id)
+    if cache_esmc and _LOCAL_ESMC_CACHE is not None:
+        model._esmc = _LOCAL_ESMC_CACHE
+    else:
+        esmc_model = _load_pretrained_with_required_weights(
+            binder_design.ESMCModel,
+            esmc_snapshot,
+            allowed_unexpected_key_prefixes=(
+                _ESMC_BASE_ALLOWED_UNEXPECTED_KEY_PREFIXES
+            ),
+        )
+        model._esmc = esmc_model.bfloat16().to(model.device).eval()
+        if cache_esmc:
             _LOCAL_ESMC_CACHE = model._esmc
-        else:
-            model._esmc = _LOCAL_ESMC_CACHE
     model.configure_lm_dropout(
         lm_dropout,
         force_lm_dropout_during_inference=True,
@@ -1711,6 +1725,74 @@ def _load_local_hf_esmfold2_model(
     )
     model.set_kernel_backend(kernel_backend)
     return model.to(device=device).eval().requires_grad_(False)
+
+
+def _resolve_esmc_snapshot() -> str:
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(
+        repo_id=_ESMC_REPO_ID,
+        revision=_ESMC_REVISION,
+        local_files_only=_hugging_face_offline(),
+    )
+
+
+def _hugging_face_offline() -> bool:
+    return any(
+        os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+        for name in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+    )
+
+
+def _load_pretrained_with_required_weights(
+    model_class,
+    model_path: str,
+    *,
+    allowed_unexpected_key_prefixes: tuple[str, ...] = (),
+    **kwargs,
+):
+    result = model_class.from_pretrained(
+        model_path,
+        output_loading_info=True,
+        **kwargs,
+    )
+    if not isinstance(result, tuple) or len(result) != 2:
+        raise RuntimeError(
+            f"{model_class.__name__}.from_pretrained did not return loading diagnostics"
+        )
+    model, loading_info = result
+    if not isinstance(loading_info, dict):
+        raise RuntimeError(
+            f"{model_class.__name__}.from_pretrained returned invalid loading diagnostics"
+        )
+
+    missing_keys = list(loading_info.get("missing_keys") or ())
+    mismatched_keys = list(loading_info.get("mismatched_keys") or ())
+    error_messages = list(loading_info.get("error_msgs") or ())
+    unexpected_keys = [
+        key
+        for key in loading_info.get("unexpected_keys") or ()
+        if not _allowed_unexpected_esmc_key(
+            str(key),
+            allowed_prefixes=allowed_unexpected_key_prefixes,
+        )
+    ]
+    if missing_keys or unexpected_keys or mismatched_keys or error_messages:
+        raise RuntimeError(
+            f"incomplete pretrained weights for {model_class.__name__} at "
+            f"{model_path}: missing_keys={missing_keys!r}, "
+            f"unexpected_keys={unexpected_keys!r}, "
+            f"mismatched_keys={mismatched_keys!r}, error_msgs={error_messages!r}"
+        )
+    return model
+
+
+def _allowed_unexpected_esmc_key(
+    key: str,
+    *,
+    allowed_prefixes: tuple[str, ...],
+) -> bool:
+    return key.endswith("._extra_state") or key.startswith(allowed_prefixes)
 
 
 def _select_critic_result(results: list[dict[str, Any]], critic_name: str) -> dict[str, Any]:

@@ -72,6 +72,28 @@ def test_installer_pins_protenix_and_selects_its_accelerator_backend() -> None:
     assert '"$PROTENIX_SOURCE" "${PROTENIX_ACCELERATOR_SPECS[@]}"' in script
 
 
+def test_installer_pins_qualified_esm_runtime() -> None:
+    script = (ROOT / "install.sh").read_text()
+
+    assert "ba4d7124864eed323a93bf3cfefcd958f573b75a" in script
+    assert "ef32577f55da19a4989cd7b22e004dc43a4998cb" in script
+    assert "github.com/EvolutionaryScale/transformers.git" in script
+    assert '--overrides "$TRANSFORMERS_OVERRIDE"' in script
+    assert 'uv pip install --reinstall "$TRANSFORMERS_SOURCE"' in script
+
+
+def test_hosted_image_worker_environment_is_offline_after_preload() -> None:
+    script = (DEPLOY / "bootstrap-image.sh").read_text()
+    installer = (ROOT / "install.sh").read_text()
+
+    install_index = script.index("./install.sh")
+    offline_index = script.index("export HF_HUB_OFFLINE=1")
+    assert offline_index > install_index
+    assert "export TRANSFORMERS_OFFLINE=1" in script
+    assert "export HF_HUB_OFFLINE=1" not in installer
+    assert "export TRANSFORMERS_OFFLINE=1" not in installer
+
+
 def test_full_qualification_verifies_evidence_models_and_extension() -> None:
     script = (DEPLOY / "qualify-image.sh").read_text()
 
@@ -98,3 +120,6 @@ def test_full_qualification_verifies_evidence_models_and_extension() -> None:
     assert "package_inventory_verified:true" in script
     assert "model_inventory_verified:true" in script
     assert "remote_round_trip:$remote_qualified" in script
+    assert 'importlib.metadata.version("transformers")' in script
+    assert "ba4d7124864eed323a93bf3cfefcd958f573b75a" in script
+    assert "offset-seqres.pdb" in script
