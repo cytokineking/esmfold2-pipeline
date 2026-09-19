@@ -164,8 +164,8 @@ class ValidationReportTest(unittest.TestCase):
                         "validation_ipSAE_aggregation": (
                             "native_ipsae_cross_role_directional_max"
                         ),
-                        "validation_iptm_source_key": "chain_pair_iptm",
-                        "validation_ipSAE_source_key": "ipsae.py",
+                        "validation_iptm_source_key": "token_pair_tm_expected",
+                        "validation_ipSAE_source_key": "token_pair_pae",
                         "validation_iptm_pairs": [
                             {
                                 "binder_chain": "A",
@@ -284,6 +284,14 @@ class ValidationReportTest(unittest.TestCase):
             self.assertEqual(
                 diagnostic_rows[0]["validation_ipSAE_aggregation"],
                 "native_ipsae_cross_role_directional_max",
+            )
+            self.assertEqual(
+                diagnostic_rows[0]["validation_iptm_source_key"],
+                "token_pair_tm_expected",
+            )
+            self.assertEqual(
+                diagnostic_rows[0]["validation_ipSAE_source_key"],
+                "token_pair_pae",
             )
             self.assertEqual(
                 json.loads(diagnostic_rows[0]["validation_iptm_pairs"])[0],
