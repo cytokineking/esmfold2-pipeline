@@ -50,6 +50,7 @@ from esmfold2_pipeline.validation.msa import (
     resolve_target_msa_pairs,
     write_msa_files_for_input,
 )
+from esmfold2_pipeline.validation.target_sequences import effective_target_sequences
 
 DEFAULT_PROTENIX_SEEDS = (101,)
 DEFAULT_PROTENIX_TOKEN_LIMIT = 2560
@@ -255,6 +256,9 @@ def run_local_protenix_validation(
     attempts_processed = 0
     recorded_structures = 0
 
+    target_sequences: tuple[str, ...] | None = None
+    target_labels: tuple[str, ...] | None = None
+
     def record_failed_attempt(
         *,
         validation_id: str,
@@ -274,6 +278,18 @@ def run_local_protenix_validation(
             retryable_failed_attempts += 1
 
     try:
+        has_pending_tasks = conn.execute(
+            """
+            SELECT 1 FROM validation_tasks
+            WHERE status = 'pending' AND attempt_count < max_attempts
+            LIMIT 1
+            """
+        ).fetchone()
+        if has_pending_tasks is not None:
+            # Resolve prepared target metadata before claiming any task. A malformed
+            # chain summary is a campaign preflight error, not a retryable model error.
+            target_sequences, target_labels = _target_sequences(root, conn)
+
         while config.max_tasks is None or attempts_processed < config.max_tasks:
             remaining = (
                 None
@@ -295,7 +311,13 @@ def run_local_protenix_validation(
                 break
 
             try:
-                tasks = _fetch_task_inputs(conn, root=root, claims=claims)
+                tasks = _fetch_task_inputs(
+                    conn,
+                    root=root,
+                    claims=claims,
+                    target_sequences=target_sequences,
+                    target_labels=target_labels,
+                )
             except Exception as exc:
                 for claim in claims:
                     record_failed_attempt(
@@ -845,8 +867,11 @@ def _fetch_task_inputs(
     *,
     root: Path,
     claims: Sequence[ValidationClaim],
+    target_sequences: tuple[str, ...] | None = None,
+    target_labels: tuple[str, ...] | None = None,
 ) -> list[ProtenixTaskInput]:
-    target_sequences, target_labels = _target_sequences(root, conn)
+    if target_sequences is None or target_labels is None:
+        target_sequences, target_labels = _target_sequences(root, conn)
     tasks: list[ProtenixTaskInput] = []
     for claim in claims:
         row = conn.execute(
@@ -1160,44 +1185,16 @@ def _target_sequences(root: Path, conn) -> tuple[tuple[str, ...], tuple[str, ...
         "SELECT resolved_config_json FROM campaign WHERE id = 1"
     ).fetchone()
     resolved = json.loads(row["resolved_config_json"] or "{}") if row else {}
-    target = resolved.get("target") if isinstance(resolved, dict) else None
-    if isinstance(target, dict):
-        direct = target.get("sequence")
-        if isinstance(direct, str) and direct.strip():
-            return (_normalize_sequence(direct),), ("B",)
-
-        sequences = target.get("sequences")
-        chains = target.get("chains")
-        if isinstance(sequences, dict) and isinstance(chains, list):
-            ordered = [
-                _normalize_sequence(str(sequences[chain]))
-                for chain in chains
-                if chain in sequences and str(sequences[chain]).strip()
-            ]
-            if ordered:
-                return tuple(ordered), tuple(str(chain) for chain in chains[: len(ordered)])
-
-    summary_path = root / "target" / "chain_summary.json"
-    if summary_path.exists():
-        summary = _load_json(summary_path)
-        chains_payload = summary.get("chains")
-        if isinstance(chains_payload, list):
-            sequences_out: list[str] = []
-            labels_out: list[str] = []
-            for chain in chains_payload:
-                if not isinstance(chain, dict):
-                    continue
-                sequence = chain.get("sequence")
-                chain_id = chain.get("canonical_chain_id")
-                if isinstance(sequence, str) and sequence.strip():
-                    sequences_out.append(_normalize_sequence(sequence))
-                    labels_out.append(str(chain_id or len(labels_out)))
-            if sequences_out:
-                return tuple(sequences_out), tuple(labels_out)
-
-    raise ValueError(
-        "cannot build Protenix input because the campaign does not expose target sequence metadata"
+    sequences, labels = effective_target_sequences(
+        root,
+        resolved if isinstance(resolved, dict) else {},
     )
+    if not sequences:
+        raise ValueError(
+            "cannot build Protenix input because the campaign does not expose "
+            "target sequence metadata"
+        )
+    return sequences, labels
 
 
 def _should_use_msa(config: ProtenixRunnerConfig) -> bool:

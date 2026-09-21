@@ -15,6 +15,7 @@ from esmfold2_pipeline.validation import (
     plan_msa_prefetch,
     run_msa_prefetch_worker,
 )
+from esmfold2_pipeline.validation.msa_prefetch import _target_template_available
 
 
 class ValidationMsaPrefetchTest(unittest.TestCase):
@@ -238,6 +239,54 @@ class ValidationMsaPrefetchTest(unittest.TestCase):
             )
             conn.close()
 
+    def test_cropped_structure_summary_drives_target_msa_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_target_template(root, sequence="A" * 150)
+            conn = _campaign_db(
+                root,
+                target={
+                    "name": "cropped_structure_target",
+                    "structure": "target.cif",
+                    "chains": ["A"],
+                    "crop": {"A": ["1-150"]},
+                    "sequences": {"A": "A" * 449},
+                },
+                validation={
+                    "msa": {
+                        "use_msa": True,
+                        "target": "server",
+                        "binder": "none",
+                        "server_url": "https://msa.example",
+                    },
+                },
+            )
+            store = CampaignStore(conn)
+            _insert_completed_candidate(store, iptm=0.82)
+
+            result = enqueue_msa_prefetch_for_candidate(
+                root,
+                store=store,
+                candidate_id="cand_000000_0000",
+                critic_metrics={"iptm": 0.82},
+                log=lambda _message: None,
+            )
+
+            self.assertEqual(result.queued_jobs, 1)
+            row = conn.execute(
+                """
+                SELECT scope, representative_sequence, metadata_json
+                FROM validation_msa_jobs
+                """
+            ).fetchone()
+            self.assertEqual(row["scope"], "target")
+            self.assertEqual(row["representative_sequence"], "A" * 150)
+            self.assertEqual(
+                json.loads(row["metadata_json"])["target_sequence"],
+                "A" * 150,
+            )
+            conn.close()
+
     def test_nested_explicit_msa_overrides_top_level_false_for_template_suppression(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -267,15 +316,76 @@ class ValidationMsaPrefetchTest(unittest.TestCase):
             self.assertEqual(result.queued_jobs, 2)
             conn.close()
 
-    def test_target_template_mismatch_does_not_suppress_target_msa_prefetch(self) -> None:
+    def test_prepared_crop_overrides_stale_config_and_suppresses_matching_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            _write_target_template(root, sequence="MISMATCH")
+            _write_target_template(root, sequence="A" * 150)
             conn = _campaign_db(
                 root,
+                target={
+                    "name": "cropped_structure_target",
+                    "structure": "target.cif",
+                    "chains": ["A"],
+                    "crop": {"A": ["1-150"]},
+                    "sequences": {"A": "A" * 449},
+                },
                 validation={
                     "msa": {
                         "target": "server",
+                        "binder": "none",
+                        "server_url": "https://msa.example",
+                    },
+                },
+            )
+            store = CampaignStore(conn)
+            _insert_completed_candidate(store, iptm=0.82)
+            messages: list[str] = []
+
+            result = enqueue_msa_prefetch_for_candidate(
+                root,
+                store=store,
+                candidate_id="cand_000000_0000",
+                critic_metrics={"iptm": 0.82},
+                log=messages.append,
+            )
+
+            self.assertEqual(result.queued_jobs, 0)
+            self.assertIn("target structural template available", messages[0])
+            conn.close()
+
+    def test_template_availability_rejects_passed_sequence_or_chain_count_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_target_template(root, sequence="A" * 150)
+
+            self.assertFalse(
+                _target_template_available(root, target_sequences=("A" * 149,))
+            )
+            self.assertFalse(
+                _target_template_available(
+                    root,
+                    target_sequences=("A" * 150, "GG"),
+                )
+            )
+
+    def test_missing_template_queues_prepared_crop_sequence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_target_template(root, sequence="A" * 150)
+            (root / "target" / "normalized_target.cif").unlink()
+            conn = _campaign_db(
+                root,
+                target={
+                    "name": "cropped_structure_target",
+                    "structure": "target.cif",
+                    "chains": ["A"],
+                    "crop": {"A": ["1-150"]},
+                    "sequences": {"A": "A" * 449},
+                },
+                validation={
+                    "msa": {
+                        "target": "server",
+                        "binder": "none",
                         "server_url": "https://msa.example",
                     },
                 },
@@ -291,14 +401,12 @@ class ValidationMsaPrefetchTest(unittest.TestCase):
                 log=lambda _message: None,
             )
 
-            self.assertEqual(result.queued_jobs, 2)
-            scopes = [
-                row["scope"]
-                for row in conn.execute(
-                    "SELECT scope FROM validation_msa_jobs ORDER BY scope"
-                ).fetchall()
-            ]
-            self.assertEqual(scopes, ["miniprotein_single_sequence", "target"])
+            self.assertEqual(result.queued_jobs, 1)
+            row = conn.execute(
+                "SELECT scope, representative_sequence FROM validation_msa_jobs"
+            ).fetchone()
+            self.assertEqual(row["scope"], "target")
+            self.assertEqual(row["representative_sequence"], "A" * 150)
             conn.close()
 
     def test_builtin_vhh_framework_template_suppresses_binder_msa_by_default(self) -> None:

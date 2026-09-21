@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from esmfold2_pipeline.artifact_layout import structure_relpath
 from esmfold2_pipeline.artifacts import write_text_atomic
@@ -16,6 +16,11 @@ from esmfold2_pipeline.esm_adapter import DesignCandidateArtifact
 from esmfold2_pipeline.execution import run_campaign
 from esmfold2_pipeline.planning import plan_campaign
 from esmfold2_pipeline.reports import report_validation
+from esmfold2_pipeline.structure import (
+    StructureTargetConfig,
+    parse_structure_target,
+    write_target_artifacts,
+)
 from esmfold2_pipeline.validation import (
     ProtenixRunnerConfig,
     ProtenixTaskInput,
@@ -34,7 +39,9 @@ from esmfold2_pipeline.validation.protenix import (
     _target_template_spec,
     _tasks_requiring_binder_msas,
 )
-from esmfold2_pipeline.validation.msa import MsaPair
+from esmfold2_pipeline.validation.msa import MsaPair, ProtenixMsaConfig
+from esmfold2_pipeline.validation.msa_prefetch import _msa_job_specs_for_candidate
+from esmfold2_pipeline.validation.target_sequences import effective_target_sequences
 from esmfold2_pipeline.validation.workers import (
     _cleanup_failed_worker_scratch,
     _should_cleanup_failed_worker_scratch,
@@ -196,6 +203,117 @@ class ProtenixRunnerTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "sequence does not match"):
                 _target_template_spec(root, task)
+
+    def test_mmcif_crop_drives_target_msa_and_matching_protenix_template(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "full_target.cif"
+            _write_polymer_mmcif(
+                source,
+                polymer_length=449,
+                observed_residue_ids=(1, 75, 150, 449),
+            )
+            prepared = parse_structure_target(
+                StructureTargetConfig(
+                    path=source,
+                    chains=("A",),
+                    structure_indexing="auth_seq_id",
+                    crop={"A": ("1-150",)},
+                )
+            )
+            self.assertEqual(prepared.chains[0].sequence, "A" * 150)
+            self.assertEqual(
+                prepared.chains[0].sequence_source,
+                "mmcif_pdbx_poly_seq_scheme",
+            )
+            self.assertEqual(sum(prepared.chains[0].representative_coord_mask), 3)
+            write_target_artifacts(prepared, root / "target")
+
+            resolved = {
+                "target": {
+                    "structure": str(source),
+                    "chains": ["A"],
+                    "crop": {"A": ["1-150"]},
+                    "sequences": {"A": "A" * 449},
+                }
+            }
+            target_sequences, target_labels = effective_target_sequences(root, resolved)
+            specs, _decisions = _msa_job_specs_for_candidate(
+                root,
+                candidate_id="cand_crop",
+                designed_sequence="GGG",
+                binder_scaffold="miniprotein",
+                design_metrics={"binder_scaffold": "miniprotein"},
+                resolved_config=resolved,
+                validation={
+                    "msa": {
+                        "use_msa": True,
+                        "target": "server",
+                        "binder": "none",
+                        "server_url": "https://msa.example",
+                    }
+                },
+                msa_config=ProtenixMsaConfig(
+                    target_mode="server",
+                    binder_mode="none",
+                    server_url="https://msa.example",
+                ),
+            )
+            target_specs = [spec for spec in specs if spec.scope == "target"]
+            self.assertEqual(len(target_specs), 1)
+            self.assertEqual(target_specs[0].representative_sequence, "A" * 150)
+
+            task = ProtenixTaskInput(
+                validation_id="val_crop",
+                candidate_id="cand_crop",
+                model_name="protenix-v2",
+                selection_rank=1,
+                designed_sequence="GGG",
+                target_sequences=target_sequences,
+                target_labels=target_labels,
+                seed=101,
+                binder_scaffold="miniprotein",
+                framework=None,
+            )
+
+            template = _target_template_spec(root, task)
+            self.assertIsNotNone(template)
+            assert template is not None
+            input_json, _, _ = build_protenix_input_json(
+                [task],
+                root / "input",
+                template_specs={task.validation_id: (template,)},
+            )
+
+            sample = json.loads(input_json.read_text())[0]
+            self.assertEqual(
+                [
+                    item["proteinChain"]["sequence"]
+                    for item in sample["sequences"]
+                ],
+                ["GGG", "A" * 150],
+            )
+            self.assertEqual(sample["templates"][0]["chain_id"], ["B"])
+            self.assertEqual(sample["templates"][0]["template_id"], ["A"])
+            self.assertTrue(Path(sample["templates"][0]["cif"]).exists())
+
+            uncropped_root = root / "uncropped"
+            uncropped = parse_structure_target(
+                StructureTargetConfig(path=source, chains=("A",))
+            )
+            self.assertEqual(uncropped.chains[0].sequence, "A" * 449)
+            self.assertEqual(
+                uncropped.chains[0].sequence_source,
+                "mmcif_pdbx_poly_seq_scheme",
+            )
+            self.assertEqual(sum(uncropped.chains[0].representative_coord_mask), 4)
+            write_target_artifacts(uncropped, uncropped_root / "target")
+            full_sequences, full_labels = effective_target_sequences(
+                uncropped_root,
+                {"target": {"chains": ["A"], "sequences": {"A": "A" * 449}}},
+            )
+            self.assertEqual(full_sequences, ("A" * 449,))
+            self.assertEqual(full_labels, ("A",))
 
     def test_framework_template_suppresses_binder_msa_even_when_target_msa_active(self) -> None:
         task = ProtenixTaskInput(
@@ -1235,6 +1353,43 @@ class ProtenixRunnerTest(unittest.TestCase):
 
         self.assertGreaterEqual(len(calls), 2)
 
+    def test_malformed_prepared_target_fails_before_validation_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            campaign_dir = _run_fake_campaign(root)
+            plan_validation_tasks(campaign_dir)
+            target_dir = campaign_dir / "target"
+            target_dir.mkdir(exist_ok=True)
+            (target_dir / "chain_summary.json").write_text("{not-json")
+
+            tracked_conn = MagicMock(
+                wraps=connect_database(campaign_dir / "campaign.sqlite")
+            )
+            with patch(
+                "esmfold2_pipeline.validation.protenix.initialize_database",
+                return_value=tracked_conn,
+            ):
+                with self.assertRaisesRegex(ValueError, "chain summary is unreadable"):
+                    run_local_protenix_validation(
+                        campaign_dir,
+                        config=ProtenixRunnerConfig(max_tasks=1),
+                    )
+            tracked_conn.close.assert_called_once_with()
+
+            conn = connect_database(campaign_dir / "campaign.sqlite")
+            try:
+                task = conn.execute(
+                    "SELECT status, attempt_count FROM validation_tasks"
+                ).fetchone()
+                self.assertEqual(task["status"], "pending")
+                self.assertEqual(task["attempt_count"], 0)
+                attempts = conn.execute(
+                    "SELECT COUNT(*) FROM attempts WHERE stage = 'validation'"
+                ).fetchone()[0]
+                self.assertEqual(attempts, 0)
+            finally:
+                conn.close()
+
     def test_subprocess_runner_prepends_executable_dir_to_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             bin_dir = Path(tmpdir) / "protenix-venv" / "bin"
@@ -1771,6 +1926,103 @@ ATOM 3 C CA GLY B 2 {hotspot_distance:.3f} 0.000 0.000
 """.lstrip()
     )
     return script
+
+
+def _write_polymer_mmcif(
+    path: Path,
+    *,
+    polymer_length: int,
+    observed_residue_ids: tuple[int, ...],
+) -> None:
+    lines = [
+        "data_target",
+        "#",
+        "loop_",
+        "_atom_site.group_PDB",
+        "_atom_site.id",
+        "_atom_site.type_symbol",
+        "_atom_site.label_atom_id",
+        "_atom_site.label_alt_id",
+        "_atom_site.label_comp_id",
+        "_atom_site.label_asym_id",
+        "_atom_site.label_entity_id",
+        "_atom_site.label_seq_id",
+        "_atom_site.pdbx_PDB_ins_code",
+        "_atom_site.Cartn_x",
+        "_atom_site.Cartn_y",
+        "_atom_site.Cartn_z",
+        "_atom_site.occupancy",
+        "_atom_site.B_iso_or_equiv",
+        "_atom_site.pdbx_formal_charge",
+        "_atom_site.auth_seq_id",
+        "_atom_site.auth_comp_id",
+        "_atom_site.auth_asym_id",
+        "_atom_site.auth_atom_id",
+        "_atom_site.pdbx_PDB_model_num",
+    ]
+    atom_id = 1
+    for residue_id in observed_residue_ids:
+        base_x = float(residue_id * 3)
+        for element, atom_name, offset, y in (
+            ("N", "N", 0.0, 0.0),
+            ("C", "CA", 1.0, 0.0),
+            ("C", "C", 2.0, 0.0),
+            ("O", "O", 2.5, 0.5),
+            ("C", "CB", 1.0, 1.0),
+        ):
+            lines.append(
+                " ".join(
+                    [
+                        "ATOM",
+                        str(atom_id),
+                        element,
+                        atom_name,
+                        ".",
+                        "ALA",
+                        "A",
+                        "1",
+                        str(residue_id),
+                        "?",
+                        f"{base_x + offset:.3f}",
+                        f"{y:.3f}",
+                        "0.000",
+                        "1.00",
+                        "20.00",
+                        "?",
+                        str(residue_id),
+                        "ALA",
+                        "A",
+                        atom_name,
+                        "1",
+                    ]
+                )
+            )
+            atom_id += 1
+    lines.extend(
+        [
+            "#",
+            "loop_",
+            "_pdbx_poly_seq_scheme.asym_id",
+            "_pdbx_poly_seq_scheme.entity_id",
+            "_pdbx_poly_seq_scheme.seq_id",
+            "_pdbx_poly_seq_scheme.mon_id",
+            "_pdbx_poly_seq_scheme.ndb_seq_num",
+            "_pdbx_poly_seq_scheme.pdb_seq_num",
+            "_pdbx_poly_seq_scheme.auth_seq_num",
+            "_pdbx_poly_seq_scheme.pdb_mon_id",
+            "_pdbx_poly_seq_scheme.auth_mon_id",
+            "_pdbx_poly_seq_scheme.pdb_strand_id",
+            "_pdbx_poly_seq_scheme.pdb_ins_code",
+            "_pdbx_poly_seq_scheme.hetero",
+        ]
+    )
+    for residue_id in range(1, polymer_length + 1):
+        lines.append(
+            f"A 1 {residue_id} ALA {residue_id} {residue_id} {residue_id} "
+            "ALA ALA A ? n"
+        )
+    lines.append("#")
+    path.write_text("\n".join(lines) + "\n")
 
 
 if __name__ == "__main__":

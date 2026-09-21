@@ -30,6 +30,7 @@ from esmfold2_pipeline.validation.msa import (
     target_msa_cache_dir,
     vhh_template_group_cache_dir,
 )
+from esmfold2_pipeline.validation.target_sequences import effective_target_sequences
 
 DEFAULT_MSA_MAX_REQUESTS_PER_MINUTE = 5.0
 MSA_RATE_LIMIT_NAME = "colabfold_msa"
@@ -834,51 +835,7 @@ def _target_sequences_from_config(
     root: Path,
     config: dict[str, Any],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    target = config.get("target")
-    if not isinstance(target, dict):
-        return (), ()
-    direct = target.get("sequence")
-    if isinstance(direct, str) and direct.strip():
-        return (normalize_sequence(direct),), ("B",)
-    sequences = target.get("sequences")
-    chains = target.get("chains")
-    if isinstance(sequences, dict) and isinstance(chains, list):
-        out: list[str] = []
-        labels: list[str] = []
-        for chain in chains:
-            seq = sequences.get(chain)
-            if isinstance(seq, str) and seq.strip():
-                out.append(normalize_sequence(seq))
-                labels.append(str(chain))
-        if out:
-            return tuple(out), tuple(labels)
-    summary_path = root / "target" / "chain_summary.json"
-    if summary_path.exists():
-        try:
-            summary = json.loads(summary_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return (), ()
-        chains_summary = summary.get("chains") if isinstance(summary, dict) else None
-        if isinstance(chains_summary, list):
-            out = []
-            labels = []
-            for chain in chains_summary:
-                if not isinstance(chain, dict):
-                    continue
-                sequence = chain.get("sequence")
-                if not isinstance(sequence, str) or not sequence.strip():
-                    continue
-                label = (
-                    chain.get("canonical_chain_id")
-                    or chain.get("auth_asym_id")
-                    or chain.get("label_asym_id")
-                    or f"target{len(labels)}"
-                )
-                out.append(normalize_sequence(sequence))
-                labels.append(str(label))
-            if out:
-                return tuple(out), tuple(labels)
-    return (), ()
+    return effective_target_sequences(root, config)
 
 
 def _target_name(config: dict[str, Any]) -> str | None:
