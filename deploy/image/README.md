@@ -3,7 +3,9 @@
 `bootstrap-image.sh` creates a reproducible ESMFold2-pipeline installation on a
 fresh Ubuntu 22.04 or 24.04 GPU machine. It installs a pinned pipeline revision,
 the selected model checkpoints, Protenix v2 and its verified checkpoint, CUDA
-build and inspection tools, `rclone`, `pigz`, `sqlite3`, `tmux`, and HMMER.
+build and inspection tools, `rclone`, `pigz`, `sqlite3`, `tmux`, and HMMER. It
+also preloads ESMFold2's Chemical Component Dictionary so the lazy structure
+runtime remains usable after the image switches to offline Hugging Face mode.
 
 Set `ESMFOLD2_PIPELINE_REF` to an immutable commit before building a reusable
 image. Other optional inputs are:
@@ -31,6 +33,7 @@ The bootstrap writes a sanitized evidence set under `/etc/esmfold2-pipeline`:
 Run `qualify-image.sh --full` before capturing a reusable image. Qualification
 re-hashes the evidence, OS inventory, lockfile, bootstrap script, model blobs,
 and Protenix checkpoint; checks every model recorded by the image manifest; and
+loads the cached Chemical Component Dictionary under offline mode before it
 performs a real ESMFold2 GPU smoke. Full qualification additionally launches
 one template-enabled Protenix v2 validation for each supported modality:
 miniprotein, VHH, and scFv. It verifies the compiled Protenix extension's CUDA

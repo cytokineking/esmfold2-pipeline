@@ -55,6 +55,14 @@ def test_bootstrap_records_sanitized_reproducibility_evidence() -> None:
     assert 'DECLARED_DISK_GB="${ESMFOLD2_IMAGE_DISK_GB:-}"' in script
     assert 'MINIMUM_ROOT_GB="${ESMFOLD2_IMAGE_MIN_ROOT_GB:-}"' in script
     assert 'utilities:["cuobjdump","curl"' in script
+    assert 'hf_hub_download(repo_id="biohub/ESMFold2", filename="ccd.pkl")' in script
+    assert 'test -s "${ccd_path}"' in script
+    assert script.index('hf_hub_download(repo_id="biohub/ESMFold2"') < script.index(
+        "export HF_HUB_OFFLINE=1"
+    )
+    assert script.index('hf_hub_download(repo_id="biohub/ESMFold2"') < script.index(
+        'find "${hf_cache_root}/hub"'
+    )
 
 
 def test_installer_pins_protenix_and_selects_its_accelerator_backend() -> None:
@@ -120,6 +128,11 @@ def test_full_qualification_verifies_evidence_models_and_extension() -> None:
     assert "package_inventory_verified:true" in script
     assert "model_inventory_verified:true" in script
     assert "remote_round_trip:$remote_qualified" in script
+    assert "from esm.models.esmfold2.conformers import load_ccd" in script
+    assert "cached ESMFold2 CCD is empty" in script
+    assert script.index("from esm.models.esmfold2.conformers import load_ccd") < script.index(
+        '"${executable}" plan-gpu-smoke'
+    )
     assert 'importlib.metadata.version("transformers")' in script
     assert "ba4d7124864eed323a93bf3cfefcd958f573b75a" in script
     assert "offset-seqres.pdb" in script

@@ -102,6 +102,16 @@ test "$(sha256sum "${CHECKOUT}/uv.lock" | awk '{print $1}')" = "$(jq -r '.uv_loc
 test "$(sha256sum "${CHECKOUT}/deploy/image/bootstrap-image.sh" | awk '{print $1}')" = "$(jq -r '.bootstrap_sha256' "${image_manifest}")"
 test "$(sha256sum "${PROTENIX_CHECKPOINT_DIR}/protenix-v2.pt" | awk '{print $1}')" = "$(jq -r '.protenix_checkpoint_sha256' "${image_manifest}")"
 
+# The reusable image runs with HF_HUB_OFFLINE=1. Exercise ESMFold2's actual
+# lazy CCD loader before GPU campaigns so a missing cache entry fails directly.
+"${CHECKOUT}/.venv/bin/python" - <<'PY'
+from esm.models.esmfold2.conformers import load_ccd
+
+ccd = load_ccd()
+if not ccd:
+    raise SystemExit("cached ESMFold2 CCD is empty")
+PY
+
 evidence_tmp="$(mktemp -d /tmp/esmfold2-qualification-evidence.XXXXXX)"
 cleanup() {
   rm -rf "${evidence_tmp:-}"

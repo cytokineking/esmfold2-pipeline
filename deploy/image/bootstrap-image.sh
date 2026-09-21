@@ -220,6 +220,17 @@ ESMFOLD2_TORCH_BACKEND="${TORCH_BACKEND}" \
   --prefix "${PREFIX}" \
   --preload-models "${PRELOAD_MODELS_RAW}"
 
+# ESMFold2 loads the Chemical Component Dictionary lazily during its first
+# structure-producing GPU call. Cache that immutable runtime asset while the
+# builder is online so captured images remain usable after offline mode is set.
+ccd_path="$("${CHECKOUT}/.venv/bin/python" - <<'PY'
+from huggingface_hub import hf_hub_download
+
+print(hf_hub_download(repo_id="biohub/ESMFold2", filename="ccd.pkl"))
+PY
+)"
+test -s "${ccd_path}"
+
 cat >> "${PREFIX}/env.sh" <<EOF
 export CUDA_HOME=${CUDA_TOOLKIT_ROOT}
 export PATH=${CUDA_TOOLKIT_ROOT}/bin:\$PATH
