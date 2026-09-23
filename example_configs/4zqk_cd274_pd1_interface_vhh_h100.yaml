@@ -1,0 +1,31 @@
+# Human PD-L1 (CD274), chain A of the human PD-1/PD-L1 complex (PDB 4ZQK).
+# Hotspots are PD-L1 residues within 5 Å of PD-1 chain B in the deposited model.
+# This is a computational interface-targeting pilot, not evidence of blockade.
+target:
+  name: cd274_pd1_interface_4zqk
+  structure: ../example_input_structures/4zqk_pd1_pdl1.cif
+  chains: [A]
+  structure_indexing: auth_seq_id
+  hotspots: "A:56,66,113,115,121,123,124,125"
+  conditioning:
+    mode: distogram
+
+binder:
+  scaffold: vhh
+  framework: caplacizumab
+
+campaign:
+  num_designs: 1
+  seed_start: 42
+  inversion_model: fast-cutoff2025
+  critics:
+    - fast-cutoff2025
+  steps: 20
+
+loss:
+  binder_target_contact_mode: mosaic_cdr
+  mosaic_framework_contact_penalty_weight: 1.0
+  target_geometry_drift:
+    enabled: true
+
+output: gpu_runs/4zqk_cd274_pd1_interface_vhh_h100

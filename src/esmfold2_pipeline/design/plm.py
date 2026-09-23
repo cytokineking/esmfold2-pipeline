@@ -4,6 +4,7 @@ import math
 from typing import Any, Callable
 
 from esmfold2_pipeline.design.loop import ESMC_MASK_FRACTION, PROTEIN_1TO3, TOKENS
+from esmfold2_pipeline.esm_adapter.portable import optimization_mode
 
 
 def folding_trunk_to_lm_aa_vocab_matrix(
@@ -59,12 +60,37 @@ def compute_esmc_pseudoperplexity_nll(
     device = binder_design.device
     lm_vocab_size = esmc_model.config.vocab_size
     model_dtype = esmc_model.esmc.embed.weight.dtype
+    portable = optimization_mode() == "portable"
+    prepared = getattr(esmc_model, "_esmfold2_portable_plm_constants", None)
+    if portable:
+        stats = getattr(esmc_model, "_esmfold2_portable_plm_stats", None)
+        if stats is None:
+            stats = {"calls": 0, "prepared": 0, "reused": 0}
+            esmc_model._esmfold2_portable_plm_stats = stats
+        stats["calls"] += 1
+        stats["reused" if prepared is not None and prepared["score_mask"] is score_mask else "prepared"] += 1
+    if not portable or prepared is None or prepared["score_mask"] is not score_mask \
+            or prepared["device"] != device or prepared["dtype"] != model_dtype:
+        matrix = folding_trunk_to_lm_aa_vocab_matrix(
+            device=device, torch_module=torch, tokenizer_factory=tokenizer_factory,
+        )
+        tokenizer = tokenizer_factory()
+        mask_token = torch.zeros(lm_vocab_size, dtype=model_dtype, device=device)
+        mask_token[esmc_model.config.mask_token_id] = 1
+        prepared = {
+            "score_mask": score_mask,
+            "device": device,
+            "dtype": model_dtype,
+            "matrix": matrix,
+            "cls_token_id": tokenizer.cls_token_id,
+            "eos_token_id": tokenizer.eos_token_id,
+            "mask_token": mask_token,
+            "positions": None,
+        }
+        if portable:
+            esmc_model._esmfold2_portable_plm_constants = prepared
 
-    target_esm = binder_design @ folding_trunk_to_lm_aa_vocab_matrix(
-        device=device,
-        torch_module=torch,
-        tokenizer_factory=tokenizer_factory,
-    )
+    target_esm = binder_design @ prepared["matrix"]
     input_esm = straight_through(
         one_hot_from_probs(target_esm, functional=functional),
         target_esm,
@@ -74,9 +100,8 @@ def compute_esmc_pseudoperplexity_nll(
         dtype=model_dtype,
         device=device,
     )
-    tokenizer = tokenizer_factory()
-    input_ids[:, 0, tokenizer.cls_token_id] = 1
-    input_ids[:, -1, tokenizer.eos_token_id] = 1
+    input_ids[:, 0, prepared["cls_token_id"]] = 1
+    input_ids[:, -1, prepared["eos_token_id"]] = 1
     input_ids[:, 1:-1, 4:24] = input_esm.to(model_dtype)
 
     if score_mask.ndim == 1:
@@ -89,13 +114,21 @@ def compute_esmc_pseudoperplexity_nll(
         )
     score_mask = score_mask.to(device=device, dtype=torch.bool)
 
-    mask_token = torch.zeros(lm_vocab_size, dtype=model_dtype, device=device)
-    mask_token[esmc_model.config.mask_token_id] = 1
+    mask_token = prepared["mask_token"]
+    if portable and prepared["positions"] is None:
+        prepared["positions"] = [
+            score_mask[index].nonzero(as_tuple=False).flatten()
+            for index in range(binder_design.size(0))
+        ]
     esmc = esmc_model.esmc
 
     losses = []
     for batch_index in range(binder_design.size(0)):
-        position_indices = score_mask[batch_index].nonzero(as_tuple=False).flatten()
+        position_indices = (
+            prepared["positions"][batch_index]
+            if portable
+            else score_mask[batch_index].nonzero(as_tuple=False).flatten()
+        )
         num_positions = int(position_indices.numel())
         if num_positions == 0:
             raise ValueError(
@@ -114,18 +147,20 @@ def compute_esmc_pseudoperplexity_nll(
             dtype=torch.bool,
             device=device,
         )
-        pass_masks[
-            torch.arange(n_passes, device=device)[:, None],
-            position_indices[masked_offsets],
-        ] = True
+        pass_rows = torch.arange(n_passes, device=device)[:, None]
+        masked_cols = position_indices[masked_offsets]
+        pass_masks[pass_rows, masked_cols] = True
 
         masked_sequences = input_ids[batch_index : batch_index + 1].repeat(
             n_passes,
             1,
             1,
         )
-        mask_rows, mask_cols = pass_masks.nonzero(as_tuple=True)
-        masked_sequences[mask_rows, mask_cols + 1] = mask_token
+        if portable:
+            masked_sequences[pass_rows, masked_cols + 1] = mask_token
+        else:
+            mask_rows, mask_cols = pass_masks.nonzero(as_tuple=True)
+            masked_sequences[mask_rows, mask_cols + 1] = mask_token
 
         target_weights = target_esm[batch_index]
         masked_nlls = []
@@ -148,7 +183,11 @@ def compute_esmc_pseudoperplexity_nll(
             nlls = -(
                 log_probs * target_weights.to(log_probs.dtype).unsqueeze(0)
             ).sum(dim=-1)
-            masked_nlls.append(nlls[pass_masks[start:stop]])
+            if portable:
+                sorted_cols = masked_cols[start:stop].sort(dim=-1).values
+                masked_nlls.append(nlls[pass_rows[: stop - start], sorted_cols].reshape(-1))
+            else:
+                masked_nlls.append(nlls[pass_masks[start:stop]])
 
         losses.append(torch.cat(masked_nlls, dim=0).mean())
 

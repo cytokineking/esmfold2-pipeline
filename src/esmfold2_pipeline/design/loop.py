@@ -3,8 +3,13 @@ from __future__ import annotations
 from contextlib import nullcontext
 from dataclasses import dataclass
 import math
+import os
 import random
+import sys
+import time
 from typing import Any, Callable
+
+from esmfold2_pipeline.esm_adapter.portable import optimization_mode
 
 from esmfold2_pipeline.design.spec import DesignRunResult
 
@@ -242,8 +247,16 @@ def run_gradient_design_loop(
         )
 
     optimizer = optim.SGD([logits], lr=LEARNING_RATE)
+    portable_score_mask = (
+        gradient_mask.sum(dim=-1) > 0
+        if optimization_mode() == "portable"
+        else None
+    )
     last_design_fold: dict[str, Any] | None = None
     last_confidence_fold: dict[str, Any] | None = None
+    profile_steps = os.environ.get("ESMFOLD2_PIPELINE_PROFILE_DESIGN_STEPS") == "1"
+    profile_totals: dict[tuple[str, str], float] = {}
+    profile_counts: dict[str, int] = {}
 
     def run_step(
         step: int,
@@ -251,6 +264,20 @@ def run_gradient_design_loop(
         calculate_confidence: bool,
     ) -> StepResult:
         nonlocal logits, last_design_fold, last_confidence_fold
+        phase = "confidence" if calculate_confidence else "early"
+        if profile_steps:
+            torch.cuda.synchronize()
+            tick = time.perf_counter()
+
+        def mark(stage: str) -> None:
+            nonlocal tick
+            if profile_steps:
+                torch.cuda.synchronize()
+                now = time.perf_counter()
+                key = (phase, stage)
+                profile_totals[key] = profile_totals.get(key, 0.0) + now - tick
+                tick = now
+
         optimizer.zero_grad()
 
         inversion_model = select_inversion_model(
@@ -271,6 +298,7 @@ def run_gradient_design_loop(
             calculate_confidence=calculate_confidence,
             seed=seed + step,
         )
+        mark("fold_forward")
         last_design_fold = fold_result
         sequences = list(fold_result["seq_list"])
         if calculate_confidence:
@@ -282,9 +310,14 @@ def run_gradient_design_loop(
         )
         structure_loss = losses["total_loss"]
         structure_grad = torch.autograd.grad(structure_loss.mean(), logits)[0]
+        mark("structure_backward")
 
         design = functional.softmax(logits / temperature, dim=-1)
-        score_mask = gradient_mask.sum(dim=-1) > 0
+        score_mask = (
+            portable_score_mask
+            if portable_score_mask is not None
+            else gradient_mask.sum(dim=-1) > 0
+        )
         with seed_context(seed + step):
             plm_loss = compute_plm_loss(
                 esmc_model=esmc_model,
@@ -293,7 +326,9 @@ def run_gradient_design_loop(
                 batch_size=4,
                 n_passes=4,
             )
+        mark("plm_forward")
         plm_grad = torch.autograd.grad(plm_loss.mean(), logits)[0]
+        mark("plm_backward")
 
         logits.grad = normalized_gradient_tensor(
             structure_grad,
@@ -312,6 +347,9 @@ def run_gradient_design_loop(
         step_losses = {key: value.detach().cpu() for key, value in losses.items()}
         step_losses["plm_loss"] = plm_loss.detach().cpu()
         step_losses["total_loss"] = (structure_loss + plm_loss).detach().cpu()
+        mark("update_and_metrics")
+        if profile_steps:
+            profile_counts[phase] = profile_counts.get(phase, 0) + 1
         return StepResult(
             sequences=sequences,
             iptm=fold_result.get("iptm", None),
@@ -389,6 +427,18 @@ def run_gradient_design_loop(
         run_step=run_step,
         score_sequence=score_sequence,
     )
+    if profile_steps:
+        for phase, count in profile_counts.items():
+            averages = {
+                stage: round(total / count, 6)
+                for (recorded_phase, stage), total in profile_totals.items()
+                if recorded_phase == phase
+            }
+            print(
+                f"[esmfold2-pipeline] design_profile phase={phase} "
+                f"steps={count} mean_seconds={averages}",
+                file=sys.stderr, flush=True,
+            )
     return DesignRunResult(
         best_sequences=result.best_sequences,
         trajectory=result.trajectory,
