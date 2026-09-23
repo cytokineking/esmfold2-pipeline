@@ -14,6 +14,8 @@ field-level detail.
 | [Structure targets & hotspots](structure-targets.md) | Target input modes, hotspots, Mosaic CDR antibody targeting, structure indexing, distogram conditioning. |
 | [Optional Protenix validation](validation.md) | Launch-integrated validation, final consensus ranking, and the lower-level validation lifecycle. |
 | [Runtime & scaling](runtime-and-scaling.md) | Preprint campaign scale, compute estimates, recommended campaign progression. |
+| [Portable design optimizations](portable-optimizations.md) | Default-off source optimizations, CUDA PLM check, and benchmark harness. |
+| [Portable H100 benchmark](portable-h100-benchmark.md) | Measured speed, memory, and CD274 VHH qualification on the production image. |
 | [Output layout](outputs.md) | The full campaign tree, rank field semantics, and per-file notes. |
 
 ## Framework panels

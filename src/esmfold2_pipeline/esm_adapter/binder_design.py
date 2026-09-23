@@ -55,6 +55,10 @@ from esmfold2_pipeline.design.prompts import (
 )
 from esmfold2_pipeline.esm_adapter.folding_runtime import load_esm_folding_runtime
 from esmfold2_pipeline.esm_adapter.imports import load_binder_design_module
+from esmfold2_pipeline.esm_adapter.portable import (
+    call_model,
+    optimization_mode,
+)
 from esmfold2_pipeline.planning import binder_code
 from esmfold2_pipeline.structure import (
     PreparedTarget,
@@ -107,6 +111,7 @@ class _LocalRuntimeCacheKey:
     cuda_visible_devices: str | None
     inversion_model: _LocalModelLoadSpec
     critic_model: _LocalModelLoadSpec
+    optimization_mode: str
 
 
 @dataclass(frozen=True)
@@ -470,6 +475,8 @@ def _run_local_design(
     runtime = _get_or_load_local_design_runtime(spec)
     binder_design = runtime.binder_design
     runtime_models = runtime.runtime_models
+    mode = optimization_mode()
+    _progress(f"local design optimization_mode={mode}")
     target_sequence = target_sequence_for_design
     if target_sequence is None:
         if spec.target_name is None:
@@ -559,6 +566,17 @@ def _run_local_design(
         optim_module=binder_design.optim,
         seed_context=binder_design.seed_context,
     )
+    if mode == "portable":
+        for name, model in runtime_models.inversion_models.items():
+            _progress(
+                f"portable model={name} "
+                f"stats={getattr(model, '_esmfold2_portable_stats', {})} "
+                f"template_cache={getattr(model, '_esmfold2_portable_template_stats', {})}"
+            )
+        _progress(
+            "portable plm_stats="
+            f"{getattr(runtime_models.esmc_model, '_esmfold2_portable_plm_stats', {})}"
+        )
     return _LocalDesignExecution(
         design_run=design_run,
         binder_design=binder_design,
@@ -1662,6 +1680,7 @@ def _local_runtime_cache_key(spec: DesignSpec) -> _LocalRuntimeCacheKey:
         cuda_visible_devices=os.environ.get("CUDA_VISIBLE_DEVICES"),
         inversion_model=inversion_spec,
         critic_model=critic_spec,
+        optimization_mode=optimization_mode(),
     )
 
 
@@ -2885,6 +2904,22 @@ def _patched_fold_with_distogram_conditioning(
         binder_design.fold_and_get_distogram = original
 
 
+def _decode_design_tokens(binder_design, token_lists) -> list[str]:
+    if optimization_mode() == "portable":
+        rows = token_lists.detach().cpu().tolist()
+        return [
+            "".join(binder_design.PROTEIN_3TO1[binder_design.TOKENS[token]] for token in row)
+            for row in rows
+        ]
+    return [
+        "".join(
+            binder_design.PROTEIN_3TO1[binder_design.TOKENS[int(token.item())]]
+            for token in row
+        )
+        for row in token_lists
+    ]
+
+
 def _fold_and_get_distogram_for_sequence_target(
     binder_design,
     model,
@@ -2906,13 +2941,7 @@ def _fold_and_get_distogram_for_sequence_target(
     padded_design = binder_design.F.pad(design, (2, 11), mode="constant", value=0)
 
     token_lists = torch.argmax(padded_design, dim=-1)
-    designed_sequences = [
-        "".join(
-            binder_design.PROTEIN_3TO1[binder_design.TOKENS[int(token.item())]]
-            for token in token_list
-        )
-        for token_list in token_lists
-    ]
+    designed_sequences = _decode_design_tokens(binder_design, token_lists)
     seq_list = [
         f"{target_seq}|{binder_sequence}"
         for binder_sequence in designed_sequences
@@ -2948,13 +2977,19 @@ def _fold_and_get_distogram_for_sequence_target(
     )
 
     with binder_design.seed_context(seed):
-        output = model(
-            **inputs,
-            num_diffusion_samples=1,
-            num_sampling_steps=num_sampling_steps,
-            num_loops=num_loops,
+        output = call_model(
+            model,
+            lambda: model(
+                **inputs,
+                num_diffusion_samples=1,
+                num_sampling_steps=num_sampling_steps,
+                num_loops=num_loops,
+                calculate_confidence=calculate_confidence,
+                seed=seed,
+            ),
             calculate_confidence=calculate_confidence,
             seed=seed,
+            num_sampling_steps=num_sampling_steps,
         )
 
     result: dict = {
@@ -3013,13 +3048,7 @@ def _fold_and_get_distogram_for_structure_target(
         )
 
     token_lists = torch.argmax(padded_design, dim=-1)
-    designed_seq = [
-        "".join(
-            binder_design.PROTEIN_3TO1[binder_design.TOKENS[int(tkn.item())]]
-            for tkn in token_list
-        )
-        for token_list in token_lists
-    ]
+    designed_seq = _decode_design_tokens(binder_design, token_lists)
     seq_list = ["|".join([*target_sequences, seq]) for seq in designed_seq]
     binder_length = len(designed_seq[0])
     total_length = target_length + binder_length
@@ -3082,13 +3111,19 @@ def _fold_and_get_distogram_for_structure_target(
             model,
             template_pair_bias,
         ):
-            output = model(
-                **inputs,
-                num_diffusion_samples=1,
-                num_sampling_steps=num_sampling_steps,
-                num_loops=num_loops,
+            output = call_model(
+                model,
+                lambda: model(
+                    **inputs,
+                    num_diffusion_samples=1,
+                    num_sampling_steps=num_sampling_steps,
+                    num_loops=num_loops,
+                    calculate_confidence=calculate_confidence,
+                    seed=seed,
+                ),
                 calculate_confidence=calculate_confidence,
                 seed=seed,
+                num_sampling_steps=num_sampling_steps,
             )
 
     result: dict = {
@@ -3239,6 +3274,31 @@ def _build_distogram_template_pair_bias(
     if not enabled:
         return None
 
+    torch = binder_design.torch
+    res_type_soft = inputs["res_type_soft"]
+    batch_size = int(res_type_soft.shape[0])
+    total_length = int(res_type_soft.shape[1])
+    use_cache = optimization_mode() == "portable"
+    if use_cache:
+        template_stats = getattr(model, "_esmfold2_portable_template_stats", None)
+        if template_stats is None:
+            template_stats = {"prepared": 0, "reused": 0}
+            model._esmfold2_portable_template_stats = template_stats
+    cache = getattr(model, "_esmfold2_portable_template_cache", None)
+    assembly_key = tuple(
+        (a.canonical_chain_id, b.canonical_chain_id)
+        for a, b in assembly_pairs
+    )
+    cache_key = (
+        binder_length, batch_size, total_length, assembly_key,
+        res_type_soft.device, res_type_soft.dtype,
+    )
+    if use_cache and cache is not None:
+        cached_target, cached_key, cached_bias = cache
+        if cached_target is structure_target and cached_key == cache_key:
+            template_stats["reused"] += 1
+            return cached_bias
+
     distances_np, mask_np = _target_distogram_conditioning_matrix(
         structure_target,
         binder_length=binder_length,
@@ -3247,10 +3307,6 @@ def _build_distogram_template_pair_bias(
     if not mask_np.any():
         return None
 
-    torch = binder_design.torch
-    res_type_soft = inputs["res_type_soft"]
-    batch_size = int(res_type_soft.shape[0])
-    total_length = int(res_type_soft.shape[1])
     if distances_np.shape != (total_length, total_length):
         raise ValueError(
             "template distogram shape does not match model input length: "
@@ -3293,14 +3349,23 @@ def _build_distogram_template_pair_bias(
         bins = (distances.unsqueeze(-1) > boundaries).sum(dim=-1).long()
         pair_bias = embedding(bins).detach()
         pair_bias = pair_bias * mask.unsqueeze(-1).to(dtype=pair_bias.dtype)
-        pair_bias_float = pair_bias.float()
-        active_values = pair_bias_float[mask.unsqueeze(-1).expand_as(pair_bias_float)]
-        pair_bias_l2 = float(pair_bias_float.norm().item())
-        pair_bias_abs_mean = (
-            float(active_values.abs().mean().item())
-            if int(active_values.numel())
-            else 0.0
+        log_key = (
+            True, "using confidence_head.dist_bin_pairwise_embed",
+            batch_size, total_length, int(mask_np.sum()), len(assembly_pairs),
         )
+        if not use_cache or log_key not in getattr(
+            model, _TEMPLATE_DISTOGRAM_LOG_KEYS_ATTR, set()
+        ):
+            pair_bias_float = pair_bias.float()
+            active_values = pair_bias_float[mask.unsqueeze(-1).expand_as(pair_bias_float)]
+            pair_bias_l2 = float(pair_bias_float.norm().item())
+            pair_bias_abs_mean = (
+                float(active_values.abs().mean().item())
+                if int(active_values.numel())
+                else 0.0
+            )
+        else:
+            pair_bias_l2 = pair_bias_abs_mean = None
     _log_template_distogram_injection_once(
         model,
         enabled=True,
@@ -3312,6 +3377,12 @@ def _build_distogram_template_pair_bias(
         pair_bias_l2=pair_bias_l2,
         pair_bias_abs_mean=pair_bias_abs_mean,
     )
+    if use_cache:
+        # One active target per model. Replacing the entry bounds retained L² memory.
+        template_stats["prepared"] += 1
+        model._esmfold2_portable_template_cache = (
+            structure_target, cache_key, pair_bias,
+        )
     return pair_bias
 
 
