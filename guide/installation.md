@@ -157,6 +157,10 @@ template-capable [`cytokineking/Protenix`](https://github.com/cytokineking/Prote
 fork, downloads `protenix-v2.pt` from the Hugging Face mirror into
 `$HOME/esmfold2/protenix-checkpoints`, verifies the checkpoint SHA-256, and
 exports `PROTENIX_PYTHON` and `PROTENIX_CHECKPOINT_DIR` in `env.sh`.
+The fork includes an opt-in inference startup improvement; set
+`PROTENIX_PORTABLE_OPTIMIZATIONS=portable` in the pipeline environment to
+enable it for the separate Protenix subprocess. It defaults to `off` until
+the new source is qualified on each GPU family and installed in a new image.
 
 Use `--protenix-source` to point at another checkout or package,
 `--protenix-checkpoint-dir` for a preseeded or shared weight directory, or
