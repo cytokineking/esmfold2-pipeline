@@ -112,10 +112,12 @@ retries, heartbeats) can find them in the
 
 ## Quickstart
 
-> **Requirements:** a CUDA-capable NVIDIA GPU (80 GB strongly recommended) and a
+> **Linux quickstart requirements:** a CUDA-capable NVIDIA GPU (80 GB strongly recommended) and a
 > Linux GPU host with Python 3.12. Tested on H100, H200, A100, and Blackwell
 > (RTX PRO 6000 Blackwell, B200, B300) GPUs with CUDA 12.8+. Full hardware,
 > disk, and installer detail in the [installation guide](guide/installation.md).
+> A single-worker Apple Silicon path is described in
+> [Local Apple MPS execution](#local-apple-mps-execution).
 
 **1. Install** — clones ESM, builds isolated `uv` environments, installs the
 optional Protenix validation runtime, and preloads the common ESMFold2
@@ -181,6 +183,14 @@ after the first command has created the campaign directory. For operator control
 over each stage, use the explicit `check` → `plan` → `run-multi` → `aggregate`
 → `select` → `export` lifecycle in the
 [CLI reference](guide/cli-reference.md).
+
+## Local Apple MPS execution
+
+On an Apple Silicon Mac, use the [Mac installer and design example](guide/apple-silicon.md).
+On a 128 GB M5 Max, the 150-step PD-L1/VHH example completed in 22 min 22 s and
+peaked at 43.41 GiB sampled MPS driver allocation. The same guide covers
+installing Protenix V2 in its own environment and validating a design with
+target and framework templates.
 
 ## Design modalities
 
@@ -412,6 +422,9 @@ deployment on your own hardware or cloud. The main restriction: you may not
 provide the software (or a service exposing a substantial set of its
 functionality) to third parties as a hosted or managed service without an
 agreement from the copyright holder. See [LICENSE](LICENSE).
+The Mac projection optimization adapts [esmfold2-mlx](https://github.com/abhi0raj/esmfold2-mlx)
+under its [MIT license](src/esmfold2_pipeline/notices/esmfold2-mlx-LICENSE.txt).
+The optional [Protenix patch](vendor/protenix/README.md) is Apache-2.0.
 
 ## Built on
 

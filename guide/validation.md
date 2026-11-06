@@ -1,5 +1,8 @@
 # Optional Protenix Validation
 
+For the Apple Silicon V2 installer and tested template workflow, see the
+[Mac guide](apple-silicon.md#install-and-exercise-protenix-v2).
+
 [← Back to README](../README.md) · [Documentation index](README.md)
 
 Protenix validation is a separate post-critic stage for miniprotein, VHH, and

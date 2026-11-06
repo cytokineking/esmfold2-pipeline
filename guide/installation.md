@@ -2,6 +2,9 @@
 
 [← Back to README](../README.md) · [Documentation index](README.md)
 
+For the Apple Silicon preview, use the [Mac installation and design guide](apple-silicon.md).
+The instructions below describe the Linux CUDA installation.
+
 ## Requirements
 
 ### Hardware

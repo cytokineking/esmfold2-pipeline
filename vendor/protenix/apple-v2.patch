@@ -1,0 +1,535 @@
+diff --git a/protenix/model/layernorm_selector.py b/protenix/model/layernorm_selector.py
+index ba1bb3a6de188080202c6b78b48d7d8648734df2..a761e4be67582b9834821c947d1c4cb4678aa8dc 100644
+--- a/protenix/model/layernorm_selector.py
++++ b/protenix/model/layernorm_selector.py
+@@ -36,6 +36,8 @@ def resolve_layernorm_type() -> str:
+     layernorm_type = os.getenv("LAYERNORM_TYPE")
+     if layernorm_type:
+         return layernorm_type
++    if os.getenv("PROTENIX_DEVICE") == "cpu" or not torch.cuda.is_available():
++        return "torch"
+     if cuda_has_blackwell_or_newer_device():
+         return "torch"
+     return "fast_layernorm"
+diff --git a/protenix/model/sample_confidence.py b/protenix/model/sample_confidence.py
+index 541cfb6dfb00f29f622b7eb063ed08c17c0e355f..081281c224bb8e067f4e9d00d3bd1b09ac67bc0f 100644
+--- a/protenix/model/sample_confidence.py
++++ b/protenix/model/sample_confidence.py
+@@ -123,6 +123,17 @@ def _compute_full_data_and_summary(
+         asym_id=token_asym_id,
+         **get_bin_params(configs.loss.pae)
+     )  # [N_s, ]
++    if return_full_data:
++        full_data["token_pair_tm_expected"] = calculate_token_pair_tm_expected(
++            pae_prob,
++            **get_bin_params(configs.loss.pae),
++        )
++        full_data["token_pair_tm_normalization_count"] = torch.full(
++            (pae_prob.shape[0],),
++            token_has_frame.shape[-1],
++            dtype=torch.long,
++            device=pae_prob.device,
++        )
+ 
+     # Add: 'chain_gpde', 'chain_pair_gpde'
+     summary_confidence.update(
+@@ -335,6 +346,29 @@ def calculate_normalization(N: int) -> float:
+     return 1.24 * (max(N, 19) - 15) ** (1 / 3) - 1.8
+ 
+ 
++def calculate_token_pair_tm_expected(
++    pae_prob: torch.Tensor,
++    min_bin: float,
++    max_bin: float,
++    no_bins: int,
++) -> torch.Tensor:
++    """Return native probability-reduced TM contributions for every token pair.
++
++    The normalization count is the complete token set, matching
++    :func:`calculate_iptm`.  Keeping this matrix allows downstream consumers to
++    replace physical-chain inequality with application-defined logical roles
++    without attempting to reconstruct probabilities from expected PAE.
++    """
++
++    token_count = pae_prob.shape[-3]
++    ptm_norm = calculate_normalization(token_count)
++    bin_center = get_bin_centers(min_bin, max_bin, no_bins)
++    per_bin_weight = (1 / (1 + (bin_center / ptm_norm) ** 2)).to(
++        pae_prob.device
++    )
++    return (pae_prob * per_bin_weight).sum(dim=-1)
++
++
+ def calculate_vdw_clash(
+     pred_coordinate: torch.Tensor,
+     asym_id: torch.LongTensor,
+@@ -704,7 +738,11 @@ def calculate_chain_pair_pae(
+     device = token_pair_pae.device
+ 
+     if contact_probs is None:
+-        contact_probs = torch.ones(token_pair_pae.shape[1:], dtype=float).to(device)
++        # Metal has no float64 tensors. Keep the existing accumulation precision elsewhere.
++        weight_dtype = torch.float32 if device.type == "mps" else torch.float64
++        contact_probs = torch.ones(
++            token_pair_pae.shape[1:], device=device, dtype=weight_dtype
++        )
+ 
+     mask = token_has_frame[:, None] & token_has_frame[None, :]  # [N_token, N_token]
+     assert mask.shape == token_pair_pae.shape[1:]
+diff --git a/requirements.txt b/requirements.txt
+index 4f509e3e327e068094a23568b7c74c1565c0eab6..d8d013cdfc3bf0d2fc3cf13541b9632a922b2e73 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,7 +1,7 @@
+ torch>=2.11.0
+ torchvision>=0.26.0
+ torchaudio>=2.11.0
+-cuequivariance-torch>=0.8.0,<0.11.0
++cuequivariance-torch>=0.8.0,<0.11.0; sys_platform != 'darwin'
+ scipy>=1.9.0
+ ml_collections==1.1.0
+ tqdm==4.67.1
+@@ -18,10 +18,10 @@ gemmi==0.6.7
+ pdbeccdutils==1.0.0
+ fair-esm==2.0.0
+ scikit-learn==1.7.1
+-scikit-learn-extra==0.3.0
+-deepspeed==0.17.5
++scikit-learn-extra==0.3.0; sys_platform != 'darwin'
++deepspeed==0.17.5; sys_platform != 'darwin'
+ pydantic>=2.0.0
+-triton>=3.6.0
++triton>=3.6.0; sys_platform != 'darwin'
+ optree==0.17.0
+ protobuf==6.31.1
+ icecream==2.1.7
+diff --git a/runner/batch_inference.py b/runner/batch_inference.py
+index 0e0ed79b840b3c98b0a52e45e1a5f503eb69dde2..91c578d70b593b9b6a0314c05e66698bd00b0820 100644
+--- a/runner/batch_inference.py
++++ b/runner/batch_inference.py
+@@ -44,7 +44,6 @@ from runner.inference import (
+     download_inference_cache,
+     infer_predict,
+     InferenceRunner,
+-    update_gpu_compatible_configs,
+ )
+ from runner.msa_search import msa_search, update_infer_json
+ from runner.rna_msa_search import update_rna_msa_info
+@@ -417,20 +416,10 @@ def get_default_runner(
+             )
+     configs.sample_diffusion.guidance.enable = use_tfg_guidance
+ 
+-    configs = update_gpu_compatible_configs(configs)
+     logger.info(
+         f"Inference by Protenix: model_size: {model_size}, "
+         f"with_feature: {model_feature.replace('-', ',')}, "
+-        f"model_version: {model_version}, dtype: {configs.dtype}"
+-    )
+-    logger.info(
+-        f"Triangle_multiplicative kernel: {trimul_kernel}, "
+-        f"Triangle_attention kernel: {triatt_kernel}"
+-    )
+-    logger.info(
+-        f"enable_diffusion_shared_vars_cache: {configs.enable_diffusion_shared_vars_cache}, "
+-        f"enable_efficient_fusion: {configs.enable_efficient_fusion}, "
+-        f"enable_tf32: {configs.enable_tf32}"
++        f"model_version: {model_version}"
+     )
+     download_inference_cache(configs)
+     return InferenceRunner(configs)
+diff --git a/runner/dumper.py b/runner/dumper.py
+index cef14211d344158a925ba039f6ae24db7e596498..556344332f0ae93c2042794450983517c2410e52 100644
+--- a/runner/dumper.py
++++ b/runner/dumper.py
+@@ -40,8 +40,34 @@ def get_clean_full_confidence(full_confidence_dict: dict) -> dict:
+     full_confidence_dict.pop("atom_coordinate")
+     # Remove atom_is_polymer
+     full_confidence_dict.pop("atom_is_polymer")
+-    # Keep two decimal places
++    # Preserve native expected-TM contributions at model precision.  Rounding
++    # this matrix makes exact logical-role ipTM reconstruction impossible.
++    token_pair_tm_expected = full_confidence_dict.pop(
++        "token_pair_tm_expected", None
++    )
++    token_pair_tm_normalization_count = full_confidence_dict.pop(
++        "token_pair_tm_normalization_count", None
++    )
++    # Keep two decimal places for the established diagnostic payload.
+     full_confidence_dict = round_values(full_confidence_dict)
++    if token_pair_tm_expected is not None:
++        if isinstance(token_pair_tm_expected, torch.Tensor):
++            if token_pair_tm_expected.dtype == torch.bfloat16:
++                token_pair_tm_expected = token_pair_tm_expected.float()
++            token_pair_tm_expected = token_pair_tm_expected.cpu().numpy()
++        full_confidence_dict["token_pair_tm_expected"] = token_pair_tm_expected
++    if token_pair_tm_normalization_count is not None:
++        if isinstance(token_pair_tm_normalization_count, torch.Tensor):
++            token_pair_tm_normalization_count = (
++                token_pair_tm_normalization_count.item()
++            )
++        if isinstance(token_pair_tm_normalization_count, np.generic):
++            token_pair_tm_normalization_count = (
++                token_pair_tm_normalization_count.item()
++            )
++        full_confidence_dict["token_pair_tm_normalization_count"] = int(
++            token_pair_tm_normalization_count
++        )
+     return full_confidence_dict
+ 
+ 
+diff --git a/runner/inference.py b/runner/inference.py
+index e2cca8693645f8da4ec4bfeed2cecf7f141a7399..f13a379c931a6655ba8453ea795e1abdb1ba55fe 100644
+--- a/runner/inference.py
++++ b/runner/inference.py
+@@ -15,6 +15,7 @@ import hashlib
+ import json
+ import logging
+ import os
++import sys
+ import time
+ import traceback
+ import urllib.request
+@@ -63,6 +64,18 @@ by manually adding argparse.Namespace to PyTorch's safe globals list.
+ torch.serialization.add_safe_globals([Namespace])
+ 
+ 
++def inference_device() -> torch.device:
++    """Select a single Metal device, the local CUDA rank, or CPU."""
++    backend = os.getenv("PROTENIX_DEVICE", "auto")
++    if backend in {"auto", "cuda"} and torch.cuda.is_available():
++        return torch.device("cuda", DIST_WRAPPER.local_rank)
++    if backend in {"auto", "mps"} and torch.backends.mps.is_available():
++        return torch.device("mps")
++    if backend in {"auto", "cpu"}:
++        return torch.device("cpu")
++    raise ValueError(f"Unavailable PROTENIX_DEVICE={backend!r} (auto, cuda, mps, cpu)")
++
++
+ class InferenceRunner(object):
+     """
+     Runner class for AlphaFold3 model inference.
+@@ -73,7 +86,8 @@ class InferenceRunner(object):
+     """
+ 
+     def __init__(self, configs: Any) -> None:
+-        self.configs = configs
++        self.device = inference_device()
++        self.configs = update_gpu_compatible_configs(configs, self.device)
+         self.init_env()
+         self.init_basics()
+         self.init_model()
+@@ -91,9 +105,16 @@ class InferenceRunner(object):
+             f"Distributed environment: world size: {DIST_WRAPPER.world_size}, "
+             f"global rank: {DIST_WRAPPER.rank}, local rank: {DIST_WRAPPER.local_rank}"
+         )
+-        self.use_cuda = torch.cuda.device_count() > 0
++        self.use_cuda = self.device.type == "cuda"
++        self.print(
++            f"Inference device: {self.device}, dtype: {self.configs.dtype}, "
++            f"triangle kernels: {self.configs.triangle_multiplicative}/"
++            f"{self.configs.triangle_attention}, "
++            f"shared_vars_cache: {self.configs.enable_diffusion_shared_vars_cache}, "
++            f"efficient_fusion: {self.configs.enable_efficient_fusion}, "
++            f"tf32: {self.configs.enable_tf32}"
++        )
+         if self.use_cuda:
+-            self.device = torch.device(f"cuda:{DIST_WRAPPER.local_rank}")
+             os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+             all_gpu_ids = ",".join(str(x) for x in range(torch.cuda.device_count()))
+             devices = os.getenv("CUDA_VISIBLE_DEVICES", all_gpu_ids)
+@@ -101,10 +122,10 @@ class InferenceRunner(object):
+                 f"LOCAL_RANK: {DIST_WRAPPER.local_rank} - CUDA_VISIBLE_DEVICES: [{devices}]"
+             )
+             torch.cuda.set_device(self.device)
+-        else:
+-            self.device = torch.device("cpu")
+ 
+         if DIST_WRAPPER.world_size > 1:
++            if not self.use_cuda:
++                raise ValueError("Multi-rank inference requires CUDA.")
+             dist.init_process_group(backend="nccl")
+ 
+         if self.configs.triangle_attention == "deepspeed":
+@@ -161,12 +182,17 @@ class InferenceRunner(object):
+             raise FileNotFoundError(
+                 f"Given checkpoint path not exist [{checkpoint_path}]"
+             )
++        if sys.platform == "darwin" and self.configs.model_name == "protenix-v2":
++            if sha256_file(checkpoint_path) != CHECKPOINT_SHA256["protenix-v2"]:
++                raise ValueError("Local protenix-v2.pt failed SHA-256 verification.")
+ 
+         self.print(
+             f"Loading from {checkpoint_path}, strict: {self.configs.load_strict}"
+         )
+         checkpoint = torch.load(
+-            checkpoint_path, map_location=self.device, weights_only=False
++            checkpoint_path,
++            map_location="cpu" if self.device.type == "mps" else self.device,
++            weights_only=False,
+         )
+ 
+         sample_key = list(checkpoint["model"].keys())[0]
+@@ -225,7 +251,7 @@ class InferenceRunner(object):
+ 
+         enable_amp = (
+             torch.autocast(device_type="cuda", dtype=eval_precision)
+-            if torch.cuda.is_available()
++            if self.use_cuda
+             else nullcontext()
+         )
+ 
+@@ -329,6 +355,18 @@ def download_inference_cache(configs: Any) -> None:
+         configs (Any): Configuration object containing paths and model names.
+     """
+ 
++    checkpoint_dir = configs.load_checkpoint_dir
++    checkpoint_path = opjoin(checkpoint_dir, f"{configs.model_name}.pt")
++    if (
++        sys.platform == "darwin"
++        and configs.model_name == "protenix-v2"
++        and not opexists(checkpoint_path)
++    ):
++        raise FileNotFoundError(
++            f"Supply an authorized protenix-v2.pt in {checkpoint_dir} "
++            "(--load_checkpoint_dir) before running V2 on macOS."
++        )
++
+     for cache_name in (
+         "ccd_components_file",
+         "ccd_components_rdkit_mol_file",
+@@ -368,9 +406,6 @@ def download_inference_cache(configs: Any) -> None:
+             else:
+                 logger.info(f"{cache_name} already exists at {cur_cache_fpath}")
+ 
+-    checkpoint_path = f"{configs.load_checkpoint_dir}/{configs.model_name}.pt"
+-    checkpoint_dir = configs.load_checkpoint_dir
+-
+     if not opexists(checkpoint_path):
+         os.makedirs(checkpoint_dir, exist_ok=True)
+         tos_url = URL[configs.model_name]
+@@ -582,35 +617,20 @@ def main(configs: Any) -> None:
+     infer_predict(runner, configs)
+ 
+ 
+-def update_gpu_compatible_configs(configs: Any) -> Any:
+-    """
+-    Update configurations to ensure compatibility with specific GPU architectures (e.g., V100).
+-
+-    Args:
+-        configs (Any): Original configurations.
+-
+-    Returns:
+-        Any: Updated configurations.
+-    """
+-
+-    def is_gpu_capability_between_7_and_8() -> bool:
+-        # Check if 7.0 <= device_capability < 8.0
+-        if not torch.cuda.is_available():
+-            return False
+-        capability = torch.cuda.get_device_capability()
+-        major, minor = capability
+-        cc = major + minor / 10.0
+-        return 7.0 <= cc < 8.0
+-
+-    if is_gpu_capability_between_7_and_8():
+-        # V100 and similar architectures don't support some kernels or BF16 effectively
+-        configs.dtype = "fp32"
+-        configs.triangle_attention = "torch"
+-        configs.triangle_multiplicative = "torch"
+-        logger.info(
+-            "Enforcing FP32 and torch kernels for compatibility with detected "
+-            "GPU (Compute Capability 7.x)."
+-        )
++def update_gpu_compatible_configs(configs: Any, device: torch.device | None = None) -> Any:
++    """Apply inference settings supported by the selected device."""
++    if device is None:
++        device = inference_device()
++    if device.type == "cuda":
++        if torch.cuda.get_device_capability(device)[0] != 7:
++            return configs
++        logger.info("Selecting FP32 and torch kernels for CUDA compute capability 7.x.")
++    else:
++        configs.enable_efficient_fusion = False
++        configs.enable_tf32 = False
++    configs.dtype = "fp32"
++    configs.triangle_attention = "torch"
++    configs.triangle_multiplicative = "torch"
+     return configs
+ 
+ 
+@@ -683,16 +703,7 @@ def run() -> None:
+     logger.info(
+         f"Inference by Protenix: model_size: {model_size}, "
+         f"with_feature: {model_feature.replace('-', ', ')}, "
+-        f"model_version: {model_version}, dtype: {configs.dtype}"
+-    )
+-    configs = update_gpu_compatible_configs(configs)
+-    logger.info(
+-        f"Triangle kernels: multiplicative={configs.triangle_multiplicative}, "
+-        f"attention={configs.triangle_attention}"
+-    )
+-    logger.info(
+-        f"Optimization: shared_vars_cache={configs.enable_diffusion_shared_vars_cache}, "
+-        f"efficient_fusion={configs.enable_efficient_fusion}, tf32={configs.enable_tf32}"
++        f"model_version: {model_version}"
+     )
+     download_inference_cache(configs)
+     main(configs)
+diff --git a/tests/test_installation.py b/tests/test_installation.py
+index 5448150a6335c8275ddf2827a8c0b747881d168b..5582d2a3a0b1f8bfc24a1e662ad778e4583c6e88 100644
+--- a/tests/test_installation.py
++++ b/tests/test_installation.py
+@@ -21,14 +21,58 @@ Related to GitHub issues #182 (pip install error)
+ """
+ 
+ import importlib.util
++import os
+ import sys
+ import unittest
+ from pathlib import Path
++from types import SimpleNamespace
++from unittest.mock import patch
+ 
+ 
+ class TestInstallation(unittest.TestCase):
+     """Test that package dependencies are compatible"""
+ 
++    def test_explicit_mps_requires_metal(self):
++        from runner.inference import inference_device
++
++        with patch.dict(os.environ, PROTENIX_DEVICE="mps"), patch(
++            "torch.backends.mps.is_available", return_value=False
++        ):
++            with self.assertRaisesRegex(ValueError, "PROTENIX_DEVICE"):
++                inference_device()
++
++    def test_auto_selects_cuda_before_mps(self):
++        from runner.inference import inference_device
++
++        with patch.dict(os.environ, PROTENIX_DEVICE="auto"), patch(
++            "torch.cuda.is_available", return_value=True
++        ), patch("torch.backends.mps.is_available", return_value=True):
++            self.assertEqual(inference_device().type, "cuda")
++
++    def test_device_kernel_selection(self):
++        import torch
++
++        from runner.inference import update_gpu_compatible_configs
++
++        for device, capability, expected_dtype, expected_kernel, fusion in [
++            ("mps", None, "fp32", "torch", False),
++            ("cpu", None, "fp32", "torch", False),
++            ("cuda", (7, 0), "fp32", "torch", True),
++            ("cuda", (9, 0), "bf16", "cuequivariance", True),
++        ]:
++            with self.subTest(device=device, capability=capability), patch(
++                "torch.cuda.get_device_capability", return_value=capability
++            ):
++                configs = SimpleNamespace(dtype="bf16", triangle_attention="cuequivariance",
++                                          triangle_multiplicative="cuequivariance",
++                                          enable_efficient_fusion=True, enable_tf32=True)
++                update_gpu_compatible_configs(configs, torch.device(device))
++                self.assertEqual(configs.dtype, expected_dtype)
++                self.assertEqual(configs.triangle_attention, expected_kernel)
++                self.assertEqual(configs.triangle_multiplicative, expected_kernel)
++                self.assertEqual(configs.enable_efficient_fusion, fusion)
++                self.assertEqual(configs.enable_tf32, fusion)
++
+     def test_python_version(self):
+         """Verify Python version is compatible (3.11+)"""
+         version_info = sys.version_info
+diff --git a/tests/test_layernorm_selection.py b/tests/test_layernorm_selection.py
+index 95d7c63566034566095cfd7e88699d8fc7081662..a383afd4131e95b53bc32ee6edb5e410cf1fd6cf 100644
+--- a/tests/test_layernorm_selection.py
++++ b/tests/test_layernorm_selection.py
+@@ -54,12 +54,12 @@ class TestLayerNormSelection(unittest.TestCase):
+                 layernorm_selector.resolve_layernorm_type(), "fast_layernorm"
+             )
+ 
+-    def test_no_cuda_defaults_to_fast_layernorm(self) -> None:
++    def test_no_cuda_defaults_to_torch_layernorm(self) -> None:
+         with patch.dict(os.environ, {}, clear=True), patch.object(
+             layernorm_selector.torch.cuda, "is_available", return_value=False
+         ):
+             self.assertEqual(
+-                layernorm_selector.resolve_layernorm_type(), "fast_layernorm"
++                layernorm_selector.resolve_layernorm_type(), "torch"
+             )
+ 
+ 
+diff --git a/tests/test_sample_confidence.py b/tests/test_sample_confidence.py
+index 744701ebb8b9786499045571497d4b36c51a3491..9871c0684c7773423c5ae74d1f2abccc57119cfb 100644
+--- a/tests/test_sample_confidence.py
++++ b/tests/test_sample_confidence.py
+@@ -12,11 +12,17 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
++import json
+ import unittest
+ 
+ import torch
+ 
+-from protenix.model.sample_confidence import calculate_chain_pair_pae
++from protenix.model.sample_confidence import (
++    calculate_chain_pair_pae,
++    calculate_iptm,
++    calculate_token_pair_tm_expected,
++)
++from runner.dumper import get_clean_full_confidence
+ 
+ 
+ class TestCalculateChainPairPAE(unittest.TestCase):
+@@ -169,6 +175,52 @@ class TestSampleConfidence(unittest.TestCase):
+         self.assertEqual(chain_pair_pae_min.shape, (N_sample, 2, 2))
+         self.assertTrue(torch.allclose(chain_pair_pae_min[0, 0, 1], torch.tensor(1.0)))
+ 
++    def test_exported_expected_tm_reproduces_native_iptm_reduction(self):
++        torch.manual_seed(7)
++        probabilities = torch.softmax(torch.randn(2, 4, 4, 8), dim=-1)
++        has_frame = torch.tensor([True, False, True, True])
++        asym_id = torch.tensor([0, 0, 1, 1])
++        bin_params = {"min_bin": 0.0, "max_bin": 32.0, "no_bins": 8}
++
++        native = calculate_iptm(
++            probabilities,
++            has_frame=has_frame,
++            asym_id=asym_id,
++            **bin_params,
++        )
++        expected_tm = calculate_token_pair_tm_expected(
++            probabilities,
++            **bin_params,
++        )
++        cross_role = asym_id[:, None] != asym_id[None, :]
++        per_row = (expected_tm * cross_role).sum(dim=-1) / (
++            cross_role.sum(dim=-1) + 1e-8
++        )
++        reconstructed = per_row[..., has_frame].max(dim=-1).values
++
++        self.assertTrue(torch.allclose(reconstructed, native))
++
++    def test_expected_tm_matrix_is_not_rounded_by_full_data_cleaner(self):
++        expected = torch.tensor([[0.123456, 0.987654]], dtype=torch.float32)
++        cleaned = get_clean_full_confidence(
++            {
++                "atom_coordinate": torch.zeros(1, 3),
++                "atom_is_polymer": torch.ones(1),
++                "token_pair_pae": torch.tensor([[1.2345, 6.789]]),
++                "token_pair_tm_expected": expected.clone(),
++                "token_pair_tm_normalization_count": torch.tensor(2),
++            }
++        )
++
++        self.assertAlmostEqual(
++            float(cleaned["token_pair_tm_expected"][0, 0]),
++            0.123456,
++            places=6,
++        )
++        self.assertAlmostEqual(float(cleaned["token_pair_pae"][0, 0]), 1.23)
++        self.assertEqual(cleaned["token_pair_tm_normalization_count"], 2)
++        json.dumps(cleaned["token_pair_tm_normalization_count"])
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

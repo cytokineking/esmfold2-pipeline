@@ -1,0 +1,83 @@
+{
+  "reference_device": "cpu",
+  "torch_version": "2.11.0",
+  "threads": 6,
+  "checks": {
+    "denoiser_max_atom_displacement_angstrom": {
+      "max_abs": 5.808322021039203e-05,
+      "mean_abs": 2.5557813786911087e-05,
+      "max_abs_limit": 0.1,
+      "pass": true
+    },
+    "denoiser_rms_displacement_angstrom": {
+      "rmsd": 2.7502703233039938e-05,
+      "limit": 0.02,
+      "pass": true
+    },
+    "iptm": {
+      "max_abs": 1.4603137969970703e-06,
+      "mean_abs": 1.4603137969970703e-06,
+      "max_abs_limit": 0.001,
+      "pass": true
+    },
+    "ptm": {
+      "max_abs": 2.1457672119140625e-06,
+      "mean_abs": 2.1457672119140625e-06,
+      "max_abs_limit": 0.001,
+      "pass": true
+    },
+    "chain_pair_iptm": {
+      "max_abs": 1.4603137969970703e-06,
+      "mean_abs": 7.301568984985352e-07,
+      "max_abs_limit": 0.001,
+      "pass": true
+    },
+    "plddt": {
+      "max_abs": 7.62939453125e-06,
+      "mean_abs": 7.62939453125e-06,
+      "max_abs_limit": 0.1,
+      "pass": true
+    },
+    "atom_plddt": {
+      "max_abs": 6.020069122314453e-06,
+      "mean_abs": 3.6954252673474694e-07,
+      "max_abs_limit": 0.005,
+      "pass": true
+    },
+    "token_pair_tm_expected": {
+      "max_abs": 0.00014415383338928223,
+      "mean_abs": 2.356679696175787e-06,
+      "max_abs_limit": 0.005,
+      "pass": true
+    },
+    "token_pair_pae": {
+      "max_abs": 0.0036869049072265625,
+      "mean_abs": 6.144642519454161e-05,
+      "max_abs_limit": 0.25,
+      "pass": true
+    },
+    "token_pair_pde": {
+      "max_abs": 0.004157066345214844,
+      "mean_abs": 4.363498029609521e-05,
+      "max_abs_limit": 0.25,
+      "pass": true
+    }
+  },
+  "setup_s": 35.76699233299587,
+  "saved_denoising_step": 100,
+  "preserved_noise_level": 105.99195098876953,
+  "denoiser_replay_s": 1.52917362502194,
+  "predict_s": 404.18767112499336,
+  "summary_cpu": {
+    "iptm": 0.3883397877216339,
+    "ptm": 0.6815245747566223,
+    "plddt": 87.71965789794922
+  },
+  "summary_mps": {
+    "iptm": 0.3883412480354309,
+    "ptm": 0.6815267205238342,
+    "plddt": 87.71965026855469
+  },
+  "darwin_ru_maxrss_bytes": 5837307904,
+  "passed": true
+}

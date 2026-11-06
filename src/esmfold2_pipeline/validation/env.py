@@ -181,6 +181,8 @@ def _run_runner_import_check(
     require_template_support: bool = False,
 ) -> dict[str, Any]:
     code = r"""
+from contextlib import redirect_stdout
+import os
 import importlib.util
 import json
 import shutil
@@ -228,7 +230,19 @@ if checks.get("protenix", {}).get("ok"):
             if spec is None:
                 errors.append(f"Protenix environment cannot import {name}")
 
-if (
+if os.environ.get("PROTENIX_DEVICE") == "mps":
+    # Probe the validator interpreter itself: an older runner may silently
+    # choose CPU even when the design environment can use Metal.
+    try:
+        with redirect_stdout(sys.stderr):
+            from runner.inference import inference_device
+            actual = str(inference_device())
+        checks["device"] = actual
+        if actual != "mps":
+            errors.append(f"Protenix selected {actual} instead of mps")
+    except Exception as exc:
+        errors.append(f"Cannot select MPS in the Protenix runner: {exc}")
+elif (
     checks["ninja"]["path"] is None
     and checks.get("runner.inference", {}).get("ok")
     and checks.get("protenix", {}).get("ok")

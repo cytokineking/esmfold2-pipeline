@@ -1,0 +1,103 @@
+{
+  "python": "3.12.15 (main, Sep 30 2026, 22:04:19) [Clang 21.0.0 (clang-2100.3.34.2)]",
+  "pytorch": "2.11.0",
+  "os": "macOS-27.0.1-arm64-arm-64bit",
+  "device": "mps",
+  "device_name": "Apple M5 Max",
+  "global_mps_fallback": "0",
+  "interval_s": 0.25,
+  "driver_sampled_high_bytes": 5298683904,
+  "phase_s": {
+    "init_model": 20.664472167001804,
+    "load_checkpoint": 1.6324826249910984,
+    "get_pairformer_output": 43.16145074999076,
+    "sample_diffusion": 11.15591112500988,
+    "run_confidence_head": 0.3545893339905888,
+    "predict": 55.18152112499229
+  },
+  "strict": true,
+  "parameters": 464442431,
+  "parameter_dtypes": [
+    "torch.float32"
+  ],
+  "parameter_devices": [
+    "mps:0"
+  ],
+  "config": {
+    "model_name": "protenix-v2",
+    "dtype": "fp32",
+    "triangle_attention": "torch",
+    "triangle_multiplicative": "torch",
+    "enable_diffusion_shared_vars_cache": true,
+    "enable_efficient_fusion": false,
+    "enable_tf32": false,
+    "use_template": true,
+    "use_msa": false,
+    "mc_dropout_apply_rate": 0.4
+  },
+  "template_features": {
+    "template_aatype": [
+      4,
+      240
+    ],
+    "template_atom_positions": [
+      4,
+      240,
+      24,
+      3
+    ],
+    "template_atom_mask": [
+      4,
+      240,
+      24
+    ],
+    "template_pseudo_beta_mask": [
+      4,
+      240,
+      240
+    ],
+    "template_distogram": [
+      4,
+      240,
+      240,
+      39
+    ],
+    "template_unit_vector": [
+      4,
+      240,
+      240,
+      3
+    ],
+    "template_backbone_frame_mask": [
+      4,
+      240,
+      240
+    ]
+  },
+  "template_pseudo_beta_residue_counts": [
+    206.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "mc_dropout_used": false,
+  "cycles": 10,
+  "diffusion_steps": 200,
+  "wall_s_including_imports": 82.71335283300141,
+  "darwin_ru_maxrss_bytes": 4841603072,
+  "inputs": {
+    "pdb_id": "4ZQK",
+    "target_length": 115,
+    "binder_length": 125,
+    "design_seed": 42,
+    "protenix_seed": 101,
+    "sample_count": 1,
+    "source": "saved 150-step PD-L1/VHH design",
+    "checkpoint_sha256": "8f931f9774a396b67033d0e58628e1834f4a1448165e04254b40a780b0c0d599"
+  },
+  "pipeline": {
+    "status": "rejected",
+    "scoped_iptm": 0.3883412584947811,
+    "scoped_ipsae": 0.08079901047460264
+  }
+}

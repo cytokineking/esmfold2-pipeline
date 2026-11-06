@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import string
 from typing import Any
@@ -211,6 +212,12 @@ def load_esm_folding_runtime(esm_repo: str | Path | None = None) -> ESMFoldingRu
     )
     from esm.utils.structure.protein_chain import ProteinChain  # type: ignore
     from esm.utils.structure.protein_complex import ProteinComplex  # type: ignore
+
+    if os.environ.get("ESMFOLD2_PIPELINE_DEVICE", "cuda").strip().lower() == "mps":
+        from esmfold2_pipeline.esm_adapter.mps import mps_seed_context
+
+        upstream_seed_context = seed_context
+        seed_context = lambda seed: mps_seed_context(torch, upstream_seed_context, seed)
 
     tokens = ["<pad>", "-"] + [RES_TYPE_TO_CCD[index] for index in range(2, 33)]
     elements = ["X"] * (max(ELEMENT_NUMBER_TO_SYMBOL) + 1)

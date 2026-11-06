@@ -1,0 +1,6 @@
+# Keep the benchmark's deposited mmCIF byte-for-byte intact.
+example_configs/apple/4zqk.cif -text -diff
+# Context lines in unified patches can contain a single significant space.
+vendor/protenix/*.patch -text -whitespace
+# Verbatim upstream copyright and third-party notices.
+vendor/protenix/LICENSE -text -whitespace
