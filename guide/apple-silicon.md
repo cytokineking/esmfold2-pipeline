@@ -109,20 +109,26 @@ the 0.60 admission floor. The validator still applies its own normal threshold.
 This workflow uses both supplied structures and no external MSA. MSA server,
 ligand, nucleic acid, and multi-worker workflows have not been qualified here.
 
-The installer puts Protenix in its own Python environment. It builds the pinned
-[fork plus the Mac patch](../vendor/protenix/README.md), selects FP32 native
-PyTorch kernels and configures `PROTENIX_DEVICE=mps`. The preflight checks
-Metal access in the validator interpreter. In the measured 240-residue case,
-Protenix strict-loaded 464,442,431 parameters; both chains contributed template
-features. The fold ran 10 recycles and 200 diffusion steps. The pipeline read
-the CIF and full confidence data and recorded binder–target ipTM 0.388 and
-ipSAE 0.081, below the selection criteria. Synchronized prediction took 55.18 s;
-the measured process took 82.71 s including imports and setup. Sampled MPS
-driver allocation peaked at 4.93 GiB and process RSS at 4.51 GiB.
+The installer checks out the Protenix fork at `d85b7baa`, verifies the Git
+tree, and installs it in a separate Python environment. The fork runs native
+FP32 PyTorch kernels on Metal, exports the pairwise expected-TM values used in
+binder–target ipTM, and corrects C-terminal O/OXT geometry before writing the
+CIF. The installer sets `PROTENIX_DEVICE=mps` and checks Metal access in the
+validator interpreter. [Pinned Protenix source](https://github.com/cytokineking/Protenix/tree/d85b7baa597aaf002656fecd427523ba3abca8fa).
+
+On the saved 240-residue design, Protenix strictly loaded all 464,442,431
+parameters. Both chains contributed template features. With 10 recycles and
+200 diffusion steps, synchronized prediction took 52.17 s and the worker took
+78.44 s including imports and setup. Sampled MPS driver allocation peaked at
+4.93 GiB and process RSS at 4.55 GiB. On chain A, the terminal C–O and C–OXT
+bonds both measured 1.233 Å. On chain B both measured 1.224 Å. All 1,901
+exported coordinates matched an FP32 CPU replay of the correction on the same
+prediction. The pipeline read the CIF and confidence data and recorded
+binder–target ipTM 0.388345 and ipSAE 0.080800, below the selection criteria.
 [Protenix run record](benchmarks/apple/m5-max-protenix-v2.json).
 
-Using the same feature tensors and fixed coordinates, re-evaluating the
-confidence on CPU changed ipTM by 0.00000146. Replaying the same denoising
+In the earlier CPU/MPS comparison, re-evaluating confidence on fixed
+coordinates changed ipTM by 0.00000146. Replaying the same denoising
 step on both devices yielded an RMS coordinate difference of 0.0000275 Å.
 These checks isolate numerical differences from the random diffusion
 trajectory. [CPU/MPS comparison and tolerances](benchmarks/apple/protenix-cpu-comparison.json).
@@ -133,4 +139,4 @@ preserves our two-template validator. If more speed is needed, the
 [RFD4 Apple port](https://huggingface.co/bios-labs/RFD4-Proteina-MLX-fp16)
 suggests a useful experiment: replace only the expensive repeated trunk
 and compare its fixed-input outputs against this baseline. Here the
-Pairformer consumed 43.2 of 55.2 prediction seconds.
+Pairformer consumed 42.3 of 52.2 prediction seconds.

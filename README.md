@@ -424,7 +424,8 @@ functionality) to third parties as a hosted or managed service without an
 agreement from the copyright holder. See [LICENSE](LICENSE).
 The Mac projection optimization adapts [esmfold2-mlx](https://github.com/abhi0raj/esmfold2-mlx)
 under its [MIT license](src/esmfold2_pipeline/notices/esmfold2-mlx-LICENSE.txt).
-The optional [Protenix patch](vendor/protenix/README.md) is Apache-2.0.
+The optional Mac validator uses the Protenix fork under its
+[Apache-2.0 license and third-party notices](https://github.com/cytokineking/Protenix/blob/d85b7baa597aaf002656fecd427523ba3abca8fa/LICENSE).
 
 ## Built on
 

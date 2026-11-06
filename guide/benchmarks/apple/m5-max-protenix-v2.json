@@ -8,12 +8,12 @@
   "interval_s": 0.25,
   "driver_sampled_high_bytes": 5298683904,
   "phase_s": {
-    "init_model": 20.664472167001804,
-    "load_checkpoint": 1.6324826249910984,
-    "get_pairformer_output": 43.16145074999076,
-    "sample_diffusion": 11.15591112500988,
-    "run_confidence_head": 0.3545893339905888,
-    "predict": 55.18152112499229
+    "init_model": 20.149353207991226,
+    "load_checkpoint": 1.4410954159975518,
+    "get_pairformer_output": 42.28203270799713,
+    "sample_diffusion": 9.205014875013148,
+    "run_confidence_head": 0.33896724999067374,
+    "predict": 52.17259370800457
   },
   "strict": true,
   "parameters": 464442431,
@@ -83,8 +83,9 @@
   "mc_dropout_used": false,
   "cycles": 10,
   "diffusion_steps": 200,
-  "wall_s_including_imports": 82.71335283300141,
-  "darwin_ru_maxrss_bytes": 4841603072,
+  "wall_s_including_imports": 78.44356787498691,
+  "darwin_ru_maxrss_bytes": 4884791296,
+  "protenix_commit": "d85b7baa597aaf002656fecd427523ba3abca8fa",
   "inputs": {
     "pdb_id": "4ZQK",
     "target_length": 115,
@@ -97,7 +98,35 @@
   },
   "pipeline": {
     "status": "rejected",
-    "scoped_iptm": 0.3883412584947811,
-    "scoped_ipsae": 0.08079901047460264
+    "scoped_iptm": 0.38834506901972127,
+    "scoped_ipsae": 0.08080018391127317
+  },
+  "terminal_oxygen_check": {
+    "atoms": 1901,
+    "chains": {
+      "A": {
+        "residue": 125,
+        "C_O_A": 1.2331945141494802,
+        "C_OXT_A": 1.2331941755145526,
+        "float64_reference_atol_A": 1e-05,
+        "displacement_O_OXT_A": [
+          0.0,
+          0.04881887120982562
+        ]
+      },
+      "B": {
+        "residue": 115,
+        "C_O_A": 1.2238688814785272,
+        "C_OXT_A": 1.2238684489424931,
+        "float64_reference_atol_A": 1e-05,
+        "displacement_O_OXT_A": [
+          0.0,
+          0.03298751207116934
+        ]
+      }
+    },
+    "cpu_replay_atol_A": 1e-05,
+    "max_CPU_FP32_replay_component_difference_A": 0.0,
+    "max_nonterminal_component_difference_A": 0.0
   }
 }

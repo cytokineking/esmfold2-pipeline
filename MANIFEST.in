@@ -5,5 +5,4 @@ recursive-include example_configs *.yaml *.cif
 recursive-include guide *.md *.json
 recursive-include scripts *.py
 recursive-include deploy *.md *.sh *.json
-recursive-include vendor/protenix *.patch *.txt *.md LICENSE
 include scripts/install-macos-protenix.sh
