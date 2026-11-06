@@ -26,6 +26,7 @@ flowchart LR
 - [Highlights](#highlights)
 - [How it works](#how-it-works)
 - [Quickstart](#quickstart)
+  - [Apple Silicon](#apple-silicon)
 - [Design modalities](#design-modalities)
 - [Results](#results)
 - [Ranking](#ranking)
@@ -116,8 +117,7 @@ retries, heartbeats) can find them in the
 > Linux GPU host with Python 3.12. Tested on H100, H200, A100, and Blackwell
 > (RTX PRO 6000 Blackwell, B200, B300) GPUs with CUDA 12.8+. Full hardware,
 > disk, and installer detail in the [installation guide](guide/installation.md).
-> A single-worker Apple Silicon path is described in
-> [Local Apple MPS execution](#local-apple-mps-execution).
+> Mac users can follow the [Apple Silicon quickstart](#apple-silicon).
 
 **1. Install** — clones ESM, builds isolated `uv` environments, installs the
 optional Protenix validation runtime, and preloads the common ESMFold2
@@ -184,13 +184,26 @@ over each stage, use the explicit `check` → `plan` → `run-multi` → `aggreg
 → `select` → `export` lifecycle in the
 [CLI reference](guide/cli-reference.md).
 
-## Local Apple MPS execution
+### Apple Silicon
 
-On an Apple Silicon Mac, use the [Mac installer and design example](guide/apple-silicon.md).
-On a 128 GB M5 Max, the 150-step PD-L1/VHH example completed in 22 min 22 s and
-peaked at 43.41 GiB sampled MPS driver allocation. The same guide covers
-installing Protenix V2 in its own environment and validating a design with
-target and framework templates.
+From the repository root (or extracted source archive), run these commands in
+a native arm64 terminal with `git` and `uv` installed. The installer sets up
+Python 3.12 and PyTorch/MPS. Allow about 25 GiB for the model cache on first use.
+
+```bash
+./install-macos.sh
+source "$HOME/esmfold2-mac/env.sh"
+esmfold2-pipeline launch example_configs/apple/pdl1-vhh.yaml --esm-repo "$ESM_REPO"
+```
+
+This runs one 150-step PD-L1/VHH design and its final critic, writing results to
+`gpu_runs/apple-pdl1-vhh`. On a 128 GB M5 Max it took 22 min 22 s and peaked
+at 43.41 GiB of sampled Metal driver memory.
+
+For optional Protenix V2 validation, add `--protenix-data /path/to/protenix-data`
+to the installer command. That directory must contain `checkpoint/protenix-v2.pt`.
+The [Apple Silicon guide](guide/apple-silicon.md#install-and-exercise-protenix-v2)
+includes the validation command and template settings.
 
 ## Design modalities
 
