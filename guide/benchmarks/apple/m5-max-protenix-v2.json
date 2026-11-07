@@ -1,0 +1,132 @@
+{
+  "python": "3.12.15 (main, Sep 30 2026, 22:04:19) [Clang 21.0.0 (clang-2100.3.34.2)]",
+  "pytorch": "2.11.0",
+  "os": "macOS-27.0.1-arm64-arm-64bit",
+  "device": "mps",
+  "device_name": "Apple M5 Max",
+  "global_mps_fallback": "0",
+  "interval_s": 0.25,
+  "driver_sampled_high_bytes": 5298683904,
+  "phase_s": {
+    "init_model": 20.149353207991226,
+    "load_checkpoint": 1.4410954159975518,
+    "get_pairformer_output": 42.28203270799713,
+    "sample_diffusion": 9.205014875013148,
+    "run_confidence_head": 0.33896724999067374,
+    "predict": 52.17259370800457
+  },
+  "strict": true,
+  "parameters": 464442431,
+  "parameter_dtypes": [
+    "torch.float32"
+  ],
+  "parameter_devices": [
+    "mps:0"
+  ],
+  "config": {
+    "model_name": "protenix-v2",
+    "dtype": "fp32",
+    "triangle_attention": "torch",
+    "triangle_multiplicative": "torch",
+    "enable_diffusion_shared_vars_cache": true,
+    "enable_efficient_fusion": false,
+    "enable_tf32": false,
+    "use_template": true,
+    "use_msa": false,
+    "mc_dropout_apply_rate": 0.4
+  },
+  "template_features": {
+    "template_aatype": [
+      4,
+      240
+    ],
+    "template_atom_positions": [
+      4,
+      240,
+      24,
+      3
+    ],
+    "template_atom_mask": [
+      4,
+      240,
+      24
+    ],
+    "template_pseudo_beta_mask": [
+      4,
+      240,
+      240
+    ],
+    "template_distogram": [
+      4,
+      240,
+      240,
+      39
+    ],
+    "template_unit_vector": [
+      4,
+      240,
+      240,
+      3
+    ],
+    "template_backbone_frame_mask": [
+      4,
+      240,
+      240
+    ]
+  },
+  "template_pseudo_beta_residue_counts": [
+    206.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "mc_dropout_used": false,
+  "cycles": 10,
+  "diffusion_steps": 200,
+  "wall_s_including_imports": 78.44356787498691,
+  "darwin_ru_maxrss_bytes": 4884791296,
+  "protenix_commit": "d85b7baa597aaf002656fecd427523ba3abca8fa",
+  "inputs": {
+    "pdb_id": "4ZQK",
+    "target_length": 115,
+    "binder_length": 125,
+    "design_seed": 42,
+    "protenix_seed": 101,
+    "sample_count": 1,
+    "source": "saved 150-step PD-L1/VHH design",
+    "checkpoint_sha256": "8f931f9774a396b67033d0e58628e1834f4a1448165e04254b40a780b0c0d599"
+  },
+  "pipeline": {
+    "status": "rejected",
+    "scoped_iptm": 0.38834506901972127,
+    "scoped_ipsae": 0.08080018391127317
+  },
+  "terminal_oxygen_check": {
+    "atoms": 1901,
+    "chains": {
+      "A": {
+        "residue": 125,
+        "C_O_A": 1.2331945141494802,
+        "C_OXT_A": 1.2331941755145526,
+        "float64_reference_atol_A": 1e-05,
+        "displacement_O_OXT_A": [
+          0.0,
+          0.04881887120982562
+        ]
+      },
+      "B": {
+        "residue": 115,
+        "C_O_A": 1.2238688814785272,
+        "C_OXT_A": 1.2238684489424931,
+        "float64_reference_atol_A": 1e-05,
+        "displacement_O_OXT_A": [
+          0.0,
+          0.03298751207116934
+        ]
+      }
+    },
+    "cpu_replay_atol_A": 1e-05,
+    "max_CPU_FP32_replay_component_difference_A": 0.0,
+    "max_nonterminal_component_difference_A": 0.0
+  }
+}

@@ -6,6 +6,8 @@ __pycache__/
 *.sqlite
 *.sqlite-*
 .venv/
+.local/
+gpu_runs/
 dist/
 build/
 *.egg-info/

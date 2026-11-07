@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -83,9 +84,12 @@ _DESIGN_BACKEND_ENV = "ESMFOLD2_PIPELINE_DESIGN_BACKEND"
 _LOCAL_RUNTIME_CACHE_DISABLE_ENV = "ESMFOLD2_PIPELINE_DISABLE_LOCAL_RUNTIME_CACHE"
 _SUPPORTED_DESIGN_BACKENDS = {"tutorial", "local"}
 _LOCAL_ESMC_CACHE: Any | None = None
+_LOCAL_ESMC_CACHE_DEVICE: str | None = None
 _LOCAL_INVERSION_LM_DROPOUT = 0.5
 _LOCAL_CRITIC_LM_DROPOUT = 0.25
 _LOCAL_MODEL_DEVICE = "cuda"
+_LOCAL_MODEL_DEVICE_ENV = "ESMFOLD2_PIPELINE_DEVICE"
+_LOCAL_CHECKPOINT_DIR_ENV = "ESMFOLD2_PIPELINE_CHECKPOINT_DIR"
 _LOCAL_MODEL_CACHE_ESMC = True
 _ESMC_REPO_ID = "biohub/ESMC-6B"
 _ESMC_REVISION = "45b0fa5d7fb06faefbd5e3b89bdcef35d564e79a"
@@ -480,6 +484,16 @@ def _run_local_design(
         except KeyError as exc:
             raise ValueError(f"unknown target_name: {spec.target_name}") from exc
 
+    checkpoint_dir = os.environ.get(_LOCAL_CHECKPOINT_DIR_ENV)
+    checkpoint_path = None
+    checkpoint_fingerprint = None
+    if checkpoint_dir:
+        checkpoint_path = Path(checkpoint_dir).expanduser().resolve() / f"{spec.candidate_id}.pt"
+        digest = hashlib.sha256((spec.campaign_dir / "resolved_config.yaml").read_bytes())
+        if spec.structure_target is not None:
+            digest.update(spec.structure_target.source_path.read_bytes())
+        checkpoint_fingerprint = digest.hexdigest()
+
     design_run = run_gradient_design_loop(
         target_sequence=target_sequence,
         binder_sequence=prompt_plan.binder_sequence,
@@ -558,6 +572,9 @@ def _run_local_design(
         functional=binder_design.F,
         optim_module=binder_design.optim,
         seed_context=binder_design.seed_context,
+        device=_local_model_device(),
+        checkpoint_path=checkpoint_path,
+        checkpoint_fingerprint=checkpoint_fingerprint,
     )
     return _LocalDesignExecution(
         design_run=design_run,
@@ -1563,6 +1580,23 @@ def _load_local_runtime_models(
         inversion_model_name=inversion_model_name,
         critic_name=critic_name,
     )
+    # MPS uses the same unquantized FP32 ESMC encoder for folding and the
+    # differentiable masked-LM loss.  Sharing it avoids a second 6B copy.
+    esmc_model = None
+    if inversion_spec.device == "mps":
+        global _LOCAL_ESMC_CACHE, _LOCAL_ESMC_CACHE_DEVICE
+        from esmfold2_pipeline.esm_adapter.mps import install_mps_compatibility
+
+        if not binder_design.torch.backends.mps.is_available():
+            raise RuntimeError("MPS is not available to torch in this process")
+        install_mps_compatibility(binder_design.torch)
+        esmc_model = _load_pretrained_with_required_weights(
+            binder_design.ESMCForMaskedLM,
+            esmc_snapshot,
+            torch_dtype=binder_design.torch.float32,
+        ).to("mps").eval().requires_grad_(False)
+        _LOCAL_ESMC_CACHE = esmc_model.esmc
+        _LOCAL_ESMC_CACHE_DEVICE = "mps"
     loaded_models: dict[_LocalModelLoadSpec, Any] = {}
 
     def load_model(model_spec: _LocalModelLoadSpec):
@@ -1583,7 +1617,7 @@ def _load_local_runtime_models(
     critic_models = {
         critic_name: load_model(critic_spec),
     }
-    if getattr(binder_design, "COMPILE", False):
+    if inversion_spec.device == "cuda" and getattr(binder_design, "COMPILE", False):
         compile_model = getattr(binder_design, "_apply_torch_compile", None)
         if compile_model is None:
             raise RuntimeError("ESM runtime requested COMPILE but has no compiler hook")
@@ -1595,12 +1629,17 @@ def _load_local_runtime_models(
             compile_model(model)
             compiled_model_ids.add(model_id)
 
-    esmc_model = _load_pretrained_with_required_weights(
-        binder_design.ESMCForMaskedLM,
-        esmc_snapshot,
-        torch_dtype=binder_design.torch.float32,
-    )
-    esmc_model = esmc_model.cuda().eval().requires_grad_(False)
+    if esmc_model is None:
+        esmc_model = _load_pretrained_with_required_weights(
+            binder_design.ESMCForMaskedLM,
+            esmc_snapshot,
+            torch_dtype=binder_design.torch.float32,
+        )
+        if inversion_spec.device == "cuda":
+            esmc_model = esmc_model.cuda()
+        else:
+            esmc_model = esmc_model.to(inversion_spec.device)
+        esmc_model = esmc_model.eval().requires_grad_(False)
     return RuntimeModels(
         inversion_models=inversion_models,
         critic_models=critic_models,
@@ -1681,15 +1720,22 @@ def _local_model_load_specs(
             model_name=inversion_model_name,
             lm_dropout=_LOCAL_INVERSION_LM_DROPOUT,
             cache_esmc=_LOCAL_MODEL_CACHE_ESMC,
-            device=_LOCAL_MODEL_DEVICE,
+            device=_local_model_device(),
         ),
         _LocalModelLoadSpec(
             model_name=critic_name,
             lm_dropout=_LOCAL_CRITIC_LM_DROPOUT,
             cache_esmc=_LOCAL_MODEL_CACHE_ESMC,
-            device=_LOCAL_MODEL_DEVICE,
+            device=_local_model_device(),
         ),
     )
+
+
+def _local_model_device() -> str:
+    device = os.environ.get(_LOCAL_MODEL_DEVICE_ENV, _LOCAL_MODEL_DEVICE).strip().lower()
+    if device not in {"cuda", "mps", "cpu"}:
+        raise ValueError(f"{_LOCAL_MODEL_DEVICE_ENV} must be cuda, mps, or cpu")
+    return device
 
 
 def _load_local_hf_esmfold2_model(
@@ -1701,14 +1747,22 @@ def _load_local_hf_esmfold2_model(
     device: str,
     esmc_snapshot: str,
 ):
-    global _LOCAL_ESMC_CACHE
+    global _LOCAL_ESMC_CACHE, _LOCAL_ESMC_CACHE_DEVICE
 
     repo_id = f"biohub/{model_name}"
+    model_options = {}
+    if device == "mps":
+        from esmfold2_pipeline.esm_adapter.mps import MPS_MODEL_REVISIONS
+
+        if repo_id in MPS_MODEL_REVISIONS:
+            model_options["revision"] = MPS_MODEL_REVISIONS[repo_id]
     model = binder_design.ESMFold2ExperimentalModel.from_pretrained(
         repo_id,
         load_esmc=False,
+        **model_options,
     )
-    if cache_esmc and _LOCAL_ESMC_CACHE is not None:
+    if (cache_esmc and _LOCAL_ESMC_CACHE is not None
+            and _LOCAL_ESMC_CACHE_DEVICE == device):
         model._esmc = _LOCAL_ESMC_CACHE
     else:
         esmc_model = _load_pretrained_with_required_weights(
@@ -1718,18 +1772,26 @@ def _load_local_hf_esmfold2_model(
                 _ESMC_BASE_ALLOWED_UNEXPECTED_KEY_PREFIXES
             ),
         )
-        model._esmc = esmc_model.bfloat16().to(model.device).eval()
+        if device == "cuda":
+            esmc_model = esmc_model.bfloat16()
+        model._esmc = esmc_model.to(model.device).eval()
         if cache_esmc:
             _LOCAL_ESMC_CACHE = model._esmc
+            _LOCAL_ESMC_CACHE_DEVICE = device
     model.configure_lm_dropout(
         lm_dropout,
         force_lm_dropout_during_inference=True,
     )
     kernel_backend = (
-        "cuequivariance" if getattr(binder_design, "CUE_AVAILABLE", False) else None
+        "cuequivariance" if device == "cuda" and getattr(binder_design, "CUE_AVAILABLE", False) else None
     )
     model.set_kernel_backend(kernel_backend)
-    return model.to(device=device).eval().requires_grad_(False)
+    model = model.to(device=device).eval().requires_grad_(False)
+    if device == "mps":
+        from esmfold2_pipeline.esm_adapter.mps import optimize_mps_trunk
+
+        optimize_mps_trunk(model)
+    return model
 
 
 def _resolve_esmc_snapshot() -> str:
@@ -2940,7 +3002,7 @@ def _fold_and_get_distogram_for_sequence_target(
         )
 
     inputs = {
-        key: torch.stack([inp[key] for inp in inputs_list], dim=0).cuda()
+        key: torch.stack([inp[key] for inp in inputs_list], dim=0).to(design.device)
         for key in inputs_list[0]
     }
     inputs["res_type_soft"] = torch.cat(
@@ -3061,7 +3123,7 @@ def _fold_and_get_distogram_for_structure_target(
         assembly_pairs=assembly_pairs,
     )
     inputs = {
-        key: torch.stack([inp[key] for inp in inputs_list], dim=0).cuda()
+        key: torch.stack([inp[key] for inp in inputs_list], dim=0).to(design.device)
         for key in inputs_list[0]
     }
     inputs["res_type_soft"] = torch.cat(
@@ -3279,6 +3341,19 @@ def _build_distogram_template_pair_bias(
         )
 
     device = res_type_soft.device
+    cache_key = None
+    if device.type == "mps":
+        # Conditioning depends on the target and model weights, not the soft
+        # binder sequence. Reuse the detached bias for this frozen model.
+        digest = hashlib.sha256(distances_np.tobytes())
+        digest.update(mask_np.tobytes())
+        cache_key = (
+            digest.digest(), batch_size, str(device), str(embedding.weight.dtype),
+            embedding.weight._version, boundaries._version,
+        )
+        cached = getattr(model, "_esmfold2_mps_template_cache", None)
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
     with torch.no_grad():
         distances = torch.as_tensor(
             distances_np,
@@ -3294,13 +3369,23 @@ def _build_distogram_template_pair_bias(
         pair_bias = embedding(bins).detach()
         pair_bias = pair_bias * mask.unsqueeze(-1).to(dtype=pair_bias.dtype)
         pair_bias_float = pair_bias.float()
-        active_values = pair_bias_float[mask.unsqueeze(-1).expand_as(pair_bias_float)]
         pair_bias_l2 = float(pair_bias_float.norm().item())
-        pair_bias_abs_mean = (
-            float(active_values.abs().mean().item())
-            if int(active_values.numel())
-            else 0.0
-        )
+        if device.type == "mps":
+            # The pair bias is already zero outside the mask. Avoid a large
+            # boolean-index gather used only for this diagnostic: on MPS it
+            # intermittently produced corrupt indices in long-running designs.
+            active_count = int(mask_np.sum()) * batch_size * int(pair_bias.shape[-1])
+            pair_bias_abs_mean = (
+                float(pair_bias_float.abs().sum().item()) / active_count
+                if active_count else 0.0
+            )
+        else:
+            active_values = pair_bias_float[mask.unsqueeze(-1).expand_as(pair_bias_float)]
+            pair_bias_abs_mean = (
+                float(active_values.abs().mean().item())
+                if int(active_values.numel())
+                else 0.0
+            )
     _log_template_distogram_injection_once(
         model,
         enabled=True,
@@ -3312,6 +3397,8 @@ def _build_distogram_template_pair_bias(
         pair_bias_l2=pair_bias_l2,
         pair_bias_abs_mean=pair_bias_abs_mean,
     )
+    if cache_key is not None:
+        model._esmfold2_mps_template_cache = (cache_key, pair_bias)
     return pair_bias
 
 

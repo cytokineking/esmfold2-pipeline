@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import importlib
 import importlib.util
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -31,7 +32,7 @@ def check_environment(
     require_tutorial: bool = True,
     require_local_runtime: bool = False,
 ) -> EnvCheck:
-    """Check optional ESM/Torch/CUDA dependencies without importing pipeline code."""
+    """Check optional ESM/Torch dependencies for the selected local device."""
 
     errors: list[str] = []
     checks: dict[str, Any] = {}
@@ -51,6 +52,18 @@ def check_environment(
             "cuda_available": bool(torch.cuda.is_available()),
             "cuda_device_count": int(torch.cuda.device_count()),
         }
+        device = (
+            os.environ.get("ESMFOLD2_PIPELINE_DEVICE", "cuda").strip().lower()
+            if require_local_runtime else "cuda"
+        )
+        if device not in {"cuda", "mps", "cpu"}:
+            errors.append("ESMFOLD2_PIPELINE_DEVICE must be cuda, mps, or cpu")
+        if device == "mps":
+            mps = getattr(getattr(torch, "backends", None), "mps", None)
+            available = bool(mps and mps.is_available())
+            checks["torch"]["mps_available"] = available
+            if require_cuda and not available:
+                errors.append("MPS is not available to torch")
         if torch.cuda.is_available():
             current = torch.cuda.current_device()
             props = torch.cuda.get_device_properties(current)
@@ -60,7 +73,7 @@ def check_environment(
                 props.total_memory / (1024**3),
                 2,
             )
-        elif require_cuda:
+        elif require_cuda and device == "cuda":
             errors.append("CUDA is not available to torch")
     except Exception as exc:
         errors.append(f"Could not import torch: {exc}")

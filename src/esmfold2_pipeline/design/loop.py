@@ -3,6 +3,8 @@ from __future__ import annotations
 from contextlib import nullcontext
 from dataclasses import dataclass
 import math
+import os
+from pathlib import Path
 import random
 from typing import Any, Callable
 
@@ -209,6 +211,8 @@ def run_gradient_design_loop(
     optim_module: Any | None = None,
     seed_context: Callable[[int], Any] | None = None,
     device: str = "cuda",
+    checkpoint_path: str | Path | None = None,
+    checkpoint_fingerprint: str | None = None,
 ) -> DesignRunResult:
     if steps <= 0:
         raise ValueError("steps must be positive")
@@ -244,6 +248,26 @@ def run_gradient_design_loop(
     optimizer = optim.SGD([logits], lr=LEARNING_RATE)
     last_design_fold: dict[str, Any] | None = None
     last_confidence_fold: dict[str, Any] | None = None
+    checkpoint = Path(checkpoint_path) if checkpoint_path is not None else None
+    checkpoint_id = {
+        "version": 1,
+        "fingerprint": checkpoint_fingerprint,
+        "target_sequence": target_sequence,
+        "binder_sequence": binder_sequence,
+        "seed": seed,
+        "steps": steps,
+        "batch_size": batch_size,
+        "inversion_models": sorted(inversion_models),
+        "critic_models": sorted(critic_models),
+        "device": device,
+    }
+    resume_state = None
+    if checkpoint is not None and checkpoint.exists():
+        resume_state = _load_design_checkpoint(
+            checkpoint, checkpoint_id=checkpoint_id, logits=logits,
+            optimizer=optimizer, torch=torch, device=device,
+        )
+        print(f"[esmfold2-pipeline] resumed design after step {resume_state['next_step']}", flush=True)
 
     def run_step(
         step: int,
@@ -335,7 +359,7 @@ def run_gradient_design_loop(
         results: list[dict[str, Any]] = []
         for critic_name, critic_model in critic_models.items():
             is_scaling_critic = "ESMFold2-Experimental-Fast-base" in critic_name
-            if is_scaling_critic:
+            if is_scaling_critic and device == "cuda":
                 critic_model.cuda()
             final_fold = fold_complex(
                 critic_model,
@@ -348,7 +372,7 @@ def run_gradient_design_loop(
                 seed=seed,
             )
             last_confidence_fold = final_fold
-            if is_scaling_critic:
+            if is_scaling_critic and device == "cuda":
                 critic_model.cpu()
             complex_obj = build_complex(final_fold["inputs"], final_fold["output"])
             iptm_proxy_scores = compute_distogram_iptm_proxy(
@@ -383,11 +407,38 @@ def run_gradient_design_loop(
             )
         return results
 
+    loop_options: dict[str, Any] = {}
+    if checkpoint is not None:
+        if checkpoint_fingerprint is None:
+            raise ValueError("checkpoint_fingerprint is required when checkpointing")
+        if resume_state is not None:
+            loop_options.update(
+                start_step=resume_state["next_step"],
+                initial_trajectory=resume_state["trajectory"],
+                initial_best_iptm=resume_state["best_iptm"],
+                initial_best_sequences=resume_state["best_sequences"],
+            )
+
+        def save_checkpoint(next_step, trajectory, best_iptm, best_sequences):
+            # Retain the penultimate checkpoint until the critic and artifact
+            # writes finish; a retry then recomputes the last design fold.
+            if next_step >= steps:
+                return
+            _write_design_checkpoint(
+                checkpoint, checkpoint_id=checkpoint_id, next_step=next_step,
+                trajectory=trajectory, best_iptm=best_iptm,
+                best_sequences=best_sequences, logits=logits,
+                optimizer=optimizer, torch=torch, device=device,
+            )
+
+        loop_options["on_step_completed"] = save_checkpoint
+
     result = run_design_loop(
         steps=steps,
         batch_size=batch_size,
         run_step=run_step,
         score_sequence=score_sequence,
+        **loop_options,
     )
     return DesignRunResult(
         best_sequences=result.best_sequences,
@@ -418,17 +469,28 @@ def run_design_loop(
     batch_size: int,
     run_step: RunStep,
     score_sequence: ScoreSequence,
+    start_step: int = 0,
+    initial_trajectory: dict[int, dict[str, Any]] | None = None,
+    initial_best_iptm: list[float] | None = None,
+    initial_best_sequences: list[str] | None = None,
+    on_step_completed: Callable[..., None] | None = None,
 ) -> DesignRunResult:
     if steps <= 0:
         raise ValueError("steps must be positive")
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
 
-    trajectory: dict[int, dict[str, Any]] = {}
-    best_iptm: list[float] = [-1.0] * batch_size
-    best_sequences: list[str] = [""] * batch_size
+    if start_step < 0 or start_step >= steps:
+        raise ValueError("start_step must be in the design step range")
+    trajectory = dict(initial_trajectory or {})
+    best_iptm = list(initial_best_iptm) if initial_best_iptm is not None else [-1.0] * batch_size
+    best_sequences = list(initial_best_sequences) if initial_best_sequences is not None else [""] * batch_size
+    if len(best_iptm) != batch_size or len(best_sequences) != batch_size:
+        raise ValueError("checkpoint best-sequence state does not match batch_size")
+    if set(trajectory) != set(range(start_step)):
+        raise ValueError("checkpoint trajectory does not match start_step")
 
-    for step in range(steps):
+    for step in range(start_step, steps):
         temperature = temperature_for_step(step, steps)
         step_result = run_step(
             step,
@@ -441,17 +503,18 @@ def run_design_loop(
                 f"expected batch_size={batch_size}"
             )
         trajectory[step] = step_result.losses
-        if step_result.iptm is None:
-            continue
-        if len(step_result.iptm) != batch_size:
-            raise ValueError(
-                f"step {step} returned {len(step_result.iptm)} iPTM value(s), "
-                f"expected batch_size={batch_size}"
-            )
-        for batch_index, value in enumerate(step_result.iptm):
-            if value is not None and value > best_iptm[batch_index]:
-                best_iptm[batch_index] = float(value)
-                best_sequences[batch_index] = step_result.sequences[batch_index]
+        if step_result.iptm is not None:
+            if len(step_result.iptm) != batch_size:
+                raise ValueError(
+                    f"step {step} returned {len(step_result.iptm)} iPTM value(s), "
+                    f"expected batch_size={batch_size}"
+                )
+            for batch_index, value in enumerate(step_result.iptm):
+                if value is not None and value > best_iptm[batch_index]:
+                    best_iptm[batch_index] = float(value)
+                    best_sequences[batch_index] = step_result.sequences[batch_index]
+        if on_step_completed is not None:
+            on_step_completed(step + 1, trajectory, best_iptm, best_sequences)
 
     if not all(sequence != "" for sequence in best_sequences):
         raise AssertionError("design loop did not select a best sequence for every batch")
@@ -477,6 +540,53 @@ def run_design_loop(
         trajectory=trajectory,
         critic_results=critic_results,
     )
+
+
+def _write_design_checkpoint(
+    path, *, checkpoint_id, next_step, trajectory, best_iptm, best_sequences,
+    logits, optimizer, torch, device,
+) -> None:
+    import numpy as np
+
+    np_state = np.random.get_state()
+    payload = {
+        "id": checkpoint_id,
+        "next_step": next_step,
+        "trajectory": trajectory,
+        "best_iptm": best_iptm,
+        "best_sequences": best_sequences,
+        "logits": logits.detach().cpu(),
+        "optimizer": optimizer.state_dict(),
+        "python_rng": random.getstate(),
+        "numpy_rng": (np_state[0], torch.from_numpy(np_state[1].copy()), *np_state[2:]),
+        "torch_rng": torch.get_rng_state(),
+        "mps_rng": torch.mps.get_rng_state() if device == "mps" else None,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    torch.save(payload, temporary)
+    os.replace(temporary, path)
+
+
+def _load_design_checkpoint(path, *, checkpoint_id, logits, optimizer, torch, device):
+    import numpy as np
+
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    if payload.get("id") != checkpoint_id:
+        raise ValueError(f"design checkpoint does not match this run: {path}")
+    next_step = payload.get("next_step")
+    if not isinstance(next_step, int) or not 0 < next_step < checkpoint_id["steps"]:
+        raise ValueError(f"design checkpoint has invalid step: {path}")
+    with torch.no_grad():
+        logits.copy_(payload["logits"].to(device))
+    optimizer.load_state_dict(payload["optimizer"])
+    random.setstate(payload["python_rng"])
+    np_state = payload["numpy_rng"]
+    np.random.set_state((np_state[0], np_state[1].numpy(), *np_state[2:]))
+    torch.set_rng_state(payload["torch_rng"])
+    if device == "mps":
+        torch.mps.set_rng_state(payload["mps_rng"])
+    return payload
 
 
 def _loss_item(value: Any, batch_index: int) -> Any:

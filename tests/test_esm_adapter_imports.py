@@ -8,6 +8,31 @@ from esmfold2_pipeline.esm_adapter.imports import check_environment
 
 
 class ESMAdapterImportsTest(unittest.TestCase):
+    def test_local_mps_environment_requires_visible_metal(self) -> None:
+        def check(available: bool):
+            fake_torch = types.SimpleNamespace(
+                __version__="fake",
+                cuda=types.SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
+                backends=types.SimpleNamespace(
+                    mps=types.SimpleNamespace(is_available=lambda: available)
+                ),
+            )
+            modules = {"torch": fake_torch, "esm": types.SimpleNamespace(__file__=None)}
+            with patch.dict("os.environ", {"ESMFOLD2_PIPELINE_DEVICE": "mps"}), patch(
+                "esmfold2_pipeline.esm_adapter.imports._check_local_runtime_apis"
+            ), patch(
+                "esmfold2_pipeline.esm_adapter.imports.importlib.import_module",
+                side_effect=lambda name: modules[name],
+            ):
+                return check_environment(require_tutorial=False, require_local_runtime=True)
+
+        visible = check(True)
+        self.assertTrue(visible.ok, visible.errors)
+        self.assertTrue(visible.checks["torch"]["mps_available"])
+        hidden = check(False)
+        self.assertFalse(hidden.ok)
+        self.assertIn("MPS is not available to torch", hidden.errors)
+
     def test_local_runtime_check_does_not_require_tutorial_script(self) -> None:
         class FakeProteinChain:
             from_atomarray = object()

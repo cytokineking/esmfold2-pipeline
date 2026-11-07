@@ -50,6 +50,7 @@ def compute_esmc_pseudoperplexity_nll(
     torch_module: Any | None = None,
     functional: Any | None = None,
     tokenizer_factory: Callable[[], Any] | None = None,
+    mask_random_scores=None,
 ):
     """Algorithm 14 ESMC pseudo-perplexity sequence regularization."""
 
@@ -103,7 +104,12 @@ def compute_esmc_pseudoperplexity_nll(
             )
 
         num_masked = max(1, math.ceil(ESMC_MASK_FRACTION * num_positions))
-        random_scores = torch.rand((n_passes, num_positions), device=device)
+        if mask_random_scores is None:
+            random_scores = torch.rand((n_passes, num_positions), device=device)
+        else:
+            random_scores = mask_random_scores[batch_index].to(device=device)
+            if random_scores.shape != (n_passes, num_positions):
+                raise ValueError("mask_random_scores must match passes and scored positions")
         masked_offsets = random_scores.topk(
             num_masked,
             dim=-1,

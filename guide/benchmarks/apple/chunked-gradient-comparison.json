@@ -1,0 +1,72 @@
+{
+  "res_type_soft": {
+    "finite_cpu": true,
+    "finite_mps": true,
+    "cpu_norm": 60.410850524902344,
+    "mps_norm": 60.38746643066406,
+    "cosine": 1.0,
+    "relative_l2_error": 0.000656848601878041,
+    "max_abs_difference": 0.0061473846435546875
+  },
+  "structure_logits": {
+    "finite_cpu": true,
+    "finite_mps": true,
+    "cpu_norm": 0.6585549116134644,
+    "mps_norm": 0.6578490734100342,
+    "cosine": 0.9999997615814209,
+    "relative_l2_error": 0.0012424985959061043,
+    "max_abs_difference": 0.00027823448181152344
+  },
+  "plm_logits": {
+    "finite_cpu": true,
+    "finite_mps": true,
+    "cpu_norm": 0.06897792220115662,
+    "mps_norm": 0.06897787749767303,
+    "cosine": 1.0,
+    "relative_l2_error": 3.7747688763265808e-06,
+    "max_abs_difference": 6.891787052154541e-08
+  },
+  "structure_logits_update": {
+    "finite_cpu": true,
+    "finite_mps": true,
+    "cpu_norm": 0.2828426659107208,
+    "mps_norm": 0.2828426659107208,
+    "cosine": 0.9999997615814209,
+    "relative_l2_error": 0.0006289107774942377,
+    "max_abs_difference": 5.8200210332870483e-05
+  },
+  "plm_logits_update": {
+    "finite_cpu": true,
+    "finite_mps": true,
+    "cpu_norm": 0.28284233808517456,
+    "mps_norm": 0.2828423082828522,
+    "cosine": 1.0,
+    "relative_l2_error": 3.7044664800389396e-06,
+    "max_abs_difference": 3.0547380447387695e-07
+  },
+  "combined_update": {
+    "finite_cpu": true,
+    "finite_mps": true,
+    "cpu_norm": 0.28287625312805176,
+    "mps_norm": 0.28287601470947266,
+    "cosine": 0.9999997019767761,
+    "relative_l2_error": 0.0006288576584702171,
+    "max_abs_difference": 5.821138620376587e-05
+  },
+  "plm_loss": {
+    "cpu": 3.1779251098632812,
+    "mps": 3.177924633026123
+  },
+  "mutable_positions": 8,
+  "mps_mutable_site_update_l2": {
+    "10": 0.03864685073494911,
+    "11": 0.024451710283756256,
+    "12": 0.02905621938407421,
+    "13": 0.06570558249950409,
+    "14": 0.058140549808740616,
+    "15": 0.10474074631929398,
+    "16": 0.21815377473831177,
+    "17": 0.10403779149055481
+  },
+  "fixed_and_cysteine_updates_zero": true
+}

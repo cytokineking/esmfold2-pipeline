@@ -1,0 +1,2 @@
+# Override ESM's dependency on a moving Transformers branch.
+transformers @ git+https://github.com/EvolutionaryScale/transformers.git@ef32577f55da19a4989cd7b22e004dc43a4998cb

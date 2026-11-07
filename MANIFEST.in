@@ -1,0 +1,8 @@
+include install.sh install-macos.sh uv.lock
+recursive-include requirements *.txt
+recursive-include assets *.png
+recursive-include example_configs *.yaml *.cif
+recursive-include guide *.md *.json
+recursive-include scripts *.py
+recursive-include deploy *.md *.sh *.json
+include scripts/install-macos-protenix.sh

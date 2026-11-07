@@ -26,6 +26,7 @@ flowchart LR
 - [Highlights](#highlights)
 - [How it works](#how-it-works)
 - [Quickstart](#quickstart)
+  - [Apple Silicon](#apple-silicon)
 - [Design modalities](#design-modalities)
 - [Results](#results)
 - [Ranking](#ranking)
@@ -112,10 +113,11 @@ retries, heartbeats) can find them in the
 
 ## Quickstart
 
-> **Requirements:** a CUDA-capable NVIDIA GPU (80 GB strongly recommended) and a
+> **Linux quickstart requirements:** a CUDA-capable NVIDIA GPU (80 GB strongly recommended) and a
 > Linux GPU host with Python 3.12. Tested on H100, H200, A100, and Blackwell
 > (RTX PRO 6000 Blackwell, B200, B300) GPUs with CUDA 12.8+. Full hardware,
 > disk, and installer detail in the [installation guide](guide/installation.md).
+> Mac users can follow the [Apple Silicon quickstart](#apple-silicon).
 
 **1. Install** — clones ESM, builds isolated `uv` environments, installs the
 optional Protenix validation runtime, and preloads the common ESMFold2
@@ -181,6 +183,27 @@ after the first command has created the campaign directory. For operator control
 over each stage, use the explicit `check` → `plan` → `run-multi` → `aggregate`
 → `select` → `export` lifecycle in the
 [CLI reference](guide/cli-reference.md).
+
+### Apple Silicon
+
+From the repository root (or extracted source archive), run these commands in
+a native arm64 terminal with `git` and `uv` installed. The installer sets up
+Python 3.12 and PyTorch/MPS. Allow about 25 GiB for the model cache on first use.
+
+```bash
+./install-macos.sh
+source "$HOME/esmfold2-mac/env.sh"
+esmfold2-pipeline launch example_configs/apple/pdl1-vhh.yaml --esm-repo "$ESM_REPO"
+```
+
+This runs one 150-step PD-L1/VHH design and its final critic, writing results to
+`gpu_runs/apple-pdl1-vhh`. On a 128 GB M5 Max it took 22 min 22 s and peaked
+at 43.41 GiB of sampled Metal driver memory.
+
+For optional Protenix V2 validation, add `--protenix-data /path/to/protenix-data`
+to the installer command. That directory must contain `checkpoint/protenix-v2.pt`.
+The [Apple Silicon guide](guide/apple-silicon.md#install-and-exercise-protenix-v2)
+includes the validation command and template settings.
 
 ## Design modalities
 
@@ -412,6 +435,10 @@ deployment on your own hardware or cloud. The main restriction: you may not
 provide the software (or a service exposing a substantial set of its
 functionality) to third parties as a hosted or managed service without an
 agreement from the copyright holder. See [LICENSE](LICENSE).
+The Mac projection optimization adapts [esmfold2-mlx](https://github.com/abhi0raj/esmfold2-mlx)
+under its [MIT license](src/esmfold2_pipeline/notices/esmfold2-mlx-LICENSE.txt).
+The optional Mac validator uses the Protenix fork under its
+[Apache-2.0 license and third-party notices](https://github.com/cytokineking/Protenix/blob/d85b7baa597aaf002656fecd427523ba3abca8fa/LICENSE).
 
 ## Built on
 

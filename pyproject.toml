@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "esmfold2-pipeline"
-version = "0.1.0"
+version = "1.1.0"
 description = "Campaign orchestration for ESMFold2-native binder design"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,6 +23,6 @@ esmfold2-pipeline = "esmfold2_pipeline.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-esmfold2_pipeline = ["db/schema.sql"]
+esmfold2_pipeline = ["db/schema.sql", "notices/*.txt"]
 "esmfold2_pipeline.frameworks.scfv" = ["*.yaml", "*.cif", "legacy/*.yaml", "legacy/*.md", "reference_structures/*.cif"]
 "esmfold2_pipeline.frameworks.vhh" = ["*.yaml", "*.cif", "legacy/*.yaml", "legacy/*.md", "reference_structures/*.cif"]

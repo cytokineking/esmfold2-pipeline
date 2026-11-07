@@ -1,0 +1,25 @@
+target:
+  name: cd274_pd1_interface_4zqk
+  structure: 4zqk.cif
+  chains:
+  - A
+  structure_indexing: auth_seq_id
+  hotspots: A:56,66,113,115,121,123,124,125
+  conditioning:
+    mode: distogram
+binder:
+  scaffold: vhh
+  framework: caplacizumab
+campaign:
+  num_designs: 1
+  seed_start: 42
+  inversion_model: fast-cutoff2025
+  critics:
+  - fast-cutoff2025
+  steps: 150
+loss:
+  binder_target_contact_mode: mosaic_cdr
+  mosaic_framework_contact_penalty_weight: 1.0
+  target_geometry_drift:
+    enabled: true
+output: gpu_runs/apple-pdl1-vhh

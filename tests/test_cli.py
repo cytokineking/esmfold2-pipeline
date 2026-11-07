@@ -9,6 +9,7 @@ import sys
 import tempfile
 import types
 import unittest
+import venv
 from pathlib import Path
 from unittest.mock import patch
 
@@ -139,6 +140,9 @@ class CliTest(unittest.TestCase):
 
     def test_check_protenix_reports_missing_accelerate_when_protenix_is_present(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
+            empty_env = Path(tmpdir) / "empty-env"
+            venv.create(empty_env, with_pip=False)
+            python = empty_env / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
             root = Path(tmpdir) / "protenix"
             runner = root / "runner"
             package = root / "protenix"
@@ -148,7 +152,9 @@ class CliTest(unittest.TestCase):
             (runner / "inference.py").write_text("")
             (package / "__init__.py").write_text("")
 
-            result = _run_cli("check-protenix", "--protenix-root", root)
+            result = _run_cli(
+                "check-protenix", "--protenix-root", root, "--protenix-python", python
+            )
 
         self.assertEqual(result.returncode, 1)
         self.assertIn("ok: false", result.stdout)
